@@ -13,6 +13,7 @@ The gallery is readable without login; only uploads require a bearer token.
 Before `kubectl apply -k base`, replace `saladbooru:latest` with an image your cluster can pull and provide writable storage for UID 10001.
 Create Secret `saladbooru-credentials` with a 32+-character `SALADBOORU_TOKEN` key in the same namespace.
 Post a file with `POST /api/posts` as multipart `file` with `Authorization: Bearer <token>`; placing it in `/data/images/` works without an API.
+A daily CronJob removes duplicate images.
 
 ### Try it locally
 
