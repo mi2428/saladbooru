@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"image"
 	"image/color"
 	"image/gif"
@@ -130,6 +131,51 @@ func TestUploadAndDirectDrop(t *testing.T) {
 	}
 	if w := get(t, h, "/posts/my%20photo.png"); w.Code != 200 || !strings.Contains(w.Body.String(), "id=\"back\"") {
 		t.Fatalf("detail/back: %d", w.Code)
+	}
+}
+
+func TestListRefreshesChangedFiles(t *testing.T) {
+	_, images, h := setup(t)
+	name := filepath.Join(images, "changed.png")
+	if err := os.WriteFile(name, pngImage(t), 0600); err != nil {
+		t.Fatal(err)
+	}
+	list := func() []item {
+		t.Helper()
+		var result struct {
+			Items []item `json:"items"`
+		}
+		response := get(t, h, "/api/posts")
+		if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &result) != nil {
+			t.Fatalf("list: %d %s", response.Code, response.Body.String())
+		}
+		return result.Items
+	}
+	if items := list(); len(items) != 1 || items[0].Width != 2 {
+		t.Fatalf("initial: %+v", items)
+	}
+	if items := list(); len(items) != 1 || items[0].Width != 2 {
+		t.Fatalf("cached: %+v", items)
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, image.NewRGBA(image.Rect(0, 0, 4, 1))); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(name, buf.Bytes(), 0600); err != nil {
+		t.Fatal(err)
+	}
+	changed := time.Now().Add(time.Hour)
+	if err := os.Chtimes(name, changed, changed); err != nil {
+		t.Fatal(err)
+	}
+	if items := list(); len(items) != 1 || items[0].Width != 4 || items[0].Height != 1 {
+		t.Fatalf("modified: %+v", items)
+	}
+	if err := os.Remove(name); err != nil {
+		t.Fatal(err)
+	}
+	if items := list(); len(items) != 0 {
+		t.Fatalf("removed: %+v", items)
 	}
 }
 
@@ -518,5 +564,33 @@ func TestStartupRejectsMissingTokenAndSymlinkDirectory(t *testing.T) {
 	}
 	if _, err := newServer(data, testToken); err == nil {
 		t.Fatal("symlink image directory accepted")
+	}
+}
+
+func BenchmarkList(b *testing.B) {
+	data := b.TempDir()
+	s, err := newServer(data, testToken)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { s.images.Close() })
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, image.NewRGBA(image.Rect(0, 0, 256, 256))); err != nil {
+		b.Fatal(err)
+	}
+	for i := range 99 {
+		name := filepath.Join(data, "images", fmt.Sprintf("%03d.png", i))
+		if err := os.WriteFile(name, buf.Bytes(), 0600); err != nil {
+			b.Fatal(err)
+		}
+	}
+	s.list(httptest.NewRecorder(), nil)
+	b.ResetTimer()
+	for range b.N {
+		w := httptest.NewRecorder()
+		s.list(w, nil)
+		if w.Code != http.StatusOK {
+			b.Fatalf("list: %d", w.Code)
+		}
 	}
 }

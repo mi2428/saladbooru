@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gen2brain/avif"
@@ -34,8 +35,10 @@ import (
 var assets embed.FS
 
 type server struct {
-	images *os.Root
-	token  string
+	images    *os.Root
+	token     string
+	listMu    sync.Mutex
+	listCache map[string]cachedItem
 }
 
 type item struct {
@@ -44,6 +47,11 @@ type item struct {
 	Width    int       `json:"width"`
 	Height   int       `json:"height"`
 	Modified time.Time `json:"modified_at"`
+}
+
+type cachedItem struct {
+	item item
+	stat os.FileInfo
 }
 
 func newServer(dataDir, token string) (*server, error) {
@@ -246,16 +254,34 @@ func (s *server) list(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	items := make([]item, 0)
+	cache := make(map[string]cachedItem, len(entries))
+	s.listMu.Lock()
 	for _, entry := range entries {
-		if !validName(entry.Name()) || !entry.Type().IsRegular() {
+		name := entry.Name()
+		if !validName(name) || !entry.Type().IsRegular() {
 			continue
 		}
-		f, image, _, _, err := s.openImage(entry.Name())
+		stat, err := s.images.Lstat(name)
+		if err != nil || !stat.Mode().IsRegular() {
+			continue
+		}
+		if previous, ok := s.listCache[name]; ok && os.SameFile(previous.stat, stat) && previous.stat.Size() == stat.Size() && previous.stat.ModTime().Equal(stat.ModTime()) {
+			cache[name] = previous
+			items = append(items, previous.item)
+			continue
+		}
+		f, image, _, _, err := s.openImage(name)
 		if err == nil {
+			stat, err = f.Stat()
 			f.Close()
-			items = append(items, image)
+			if err == nil {
+				cache[name] = cachedItem{image, stat}
+				items = append(items, image)
+			}
 		}
 	}
+	s.listCache = cache
+	s.listMu.Unlock()
 	sort.Slice(items, func(i, j int) bool {
 		if items[i].Modified.Equal(items[j].Modified) {
 			return items[i].Name > items[j].Name
