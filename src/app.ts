@@ -85,16 +85,6 @@ export function installZoom(relayout: () => void): () => number {
   return () => preferredHeight;
 }
 
-export function returnToGallery(event: Pick<MouseEvent, 'preventDefault'>, referrer: string, origin: string, history: Pick<History, 'back'>): void {
-  try {
-    const previous = new URL(referrer);
-    if (previous.origin === origin && previous.pathname === '/') {
-      event.preventDefault();
-      history.back();
-    }
-  } catch { /* Direct visit: follow the / link. */ }
-}
-
 export function imageRatio(post: Pick<Post, 'width' | 'height'>, img: Pick<HTMLImageElement, 'naturalWidth' | 'naturalHeight'>): number {
   return img.naturalWidth && img.naturalHeight ? img.naturalWidth / img.naturalHeight : post.width / post.height;
 }
@@ -122,8 +112,8 @@ if (typeof document !== 'undefined') {
     const full = document.getElementById('full');
     const back = document.getElementById('back');
     if (!(full instanceof HTMLImageElement) || !(back instanceof HTMLAnchorElement)) throw new Error('Missing detail elements');
+    full.alt = decodeURIComponent(match[1]);
     showImage(full, `/images/${match[1]}`, match[1], () => { status.textContent = 'This image cannot be displayed'; });
-    back.addEventListener('click', event => returnToGallery(event, document.referrer, location.origin, history));
   } else {
     const entries: {link: HTMLAnchorElement; ratio: number}[] = [];
     const preferredHeight = installZoom(layout);

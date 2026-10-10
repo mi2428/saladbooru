@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {layoutRows, installZoom, returnToGallery, imageRatio, showImage} from '../src/app.ts';
+import {layoutRows, installZoom, imageRatio, showImage} from '../src/app.ts';
 
 test('native AVIF first, preview once, then show error', () => {
   for (const name of ['x.avif', 'x.AVIF', 'x.png']) {
@@ -33,20 +33,6 @@ test('justified rows preserve natural ratios, order and sparse final row', () =>
   assert.equal(positions[3].height, 220);
   assert.ok(positions[4].x + positions[4].width < 800);
   assert.ok(layoutRows(ratios, 800, 110).positions[4].y < positions[4].y);
-});
-
-test('back restores gallery history, direct or external visits follow the fallback link', () => {
-  let prevented = 0;
-  let wentBack = 0;
-  const event = {preventDefault() { prevented++; }};
-  const history = {back() { wentBack++; }};
-  const origin = 'https://gallery.example';
-  returnToGallery(event, origin + '/', origin, history);
-  assert.equal(prevented, 1);
-  assert.equal(wentBack, 1);
-  returnToGallery(event, 'https://other.example/', origin, history);
-  returnToGallery(event, '', origin, history);
-  assert.equal(wentBack, 1);
 });
 
 test('ordinary scroll stays native while modified wheel and two-finger pinch reflow', () => {
