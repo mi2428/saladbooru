@@ -3,11 +3,13 @@ package main
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"image"
 	_ "image/gif"
@@ -53,6 +55,14 @@ func newServer(dataDir, token string) (*server, error) {
 			return nil, errors.New("SALADBOORU_TOKEN must contain only printable ASCII without spaces")
 		}
 	}
+	root, err := openImages(dataDir)
+	if err != nil {
+		return nil, err
+	}
+	return &server{images: root, token: token}, nil
+}
+
+func openImages(dataDir string) (*os.Root, error) {
 	if err := webp.Dynamic(); err != nil {
 		return nil, fmt.Errorf("libwebp and libwebpdemux are required for bounded animated WebP decoding: %w", err)
 	}
@@ -64,11 +74,7 @@ func newServer(dataDir, token string) (*server, error) {
 	if err != nil || !stat.IsDir() {
 		return nil, fmt.Errorf("image directory must be a real directory: %v", err)
 	}
-	root, err := os.OpenRoot(path)
-	if err != nil {
-		return nil, err
-	}
-	return &server{images: root, token: token}, nil
+	return os.OpenRoot(path)
 }
 
 func validName(name string) bool {
@@ -429,10 +435,87 @@ func (s *server) upload(w http.ResponseWriter, r *http.Request) {
 	}{item{Name: name, URL: "/images/" + name, Width: width, Height: height, Modified: stat.ModTime()}})
 }
 
+func dedupe(images *os.Root) (int, error) {
+	dir, err := images.Open(".")
+	if err != nil {
+		return 0, err
+	}
+	entries, err := dir.ReadDir(-1)
+	dir.Close()
+	if err != nil {
+		return 0, err
+	}
+	s := &server{images: images}
+	seen := make(map[[sha256.Size]byte]struct{})
+	removed := 0
+	for _, entry := range entries {
+		name := entry.Name()
+		if !validName(name) || !entry.Type().IsRegular() {
+			continue
+		}
+		f, _, _, _, err := s.openImage(name)
+		if err != nil { // Match the gallery: ignore invalid or disappearing files.
+			continue
+		}
+		stat, err := f.Stat()
+		if err == nil {
+			_, err = f.Seek(0, io.SeekStart)
+		}
+		hash := sha256.New()
+		if err == nil {
+			_, err = io.Copy(hash, f)
+		}
+		f.Close()
+		if err != nil {
+			return removed, err
+		}
+		var digest [sha256.Size]byte
+		copy(digest[:], hash.Sum(nil))
+		if _, exists := seen[digest]; !exists {
+			seen[digest] = struct{}{}
+			continue
+		}
+		current, err := images.Lstat(name)
+		if err != nil {
+			return removed, err
+		}
+		if !os.SameFile(stat, current) || stat.Size() != current.Size() || !stat.ModTime().Equal(current.ModTime()) {
+			continue
+		}
+		if err := images.Remove(name); err != nil {
+			return removed, err
+		}
+		removed++
+	}
+	return removed, nil
+}
+
 func main() {
+	dedupeMode := flag.Bool("dedupe", false, "delete duplicate images and exit")
+	flag.Parse()
+	if flag.NArg() != 0 {
+		fmt.Fprintln(os.Stderr, "unexpected positional arguments")
+		flag.Usage()
+		os.Exit(2)
+	}
 	dataDir := os.Getenv("SALADBOORU_DATA_DIR")
 	if dataDir == "" {
 		dataDir = "./data"
+	}
+	if *dedupeMode {
+		images, err := openImages(dataDir)
+		if err != nil {
+			slog.Error("dedupe failed", "error", err)
+			os.Exit(1)
+		}
+		removed, err := dedupe(images)
+		images.Close()
+		if err != nil {
+			slog.Error("dedupe failed", "error", err)
+			os.Exit(1)
+		}
+		slog.Info("dedupe complete", "removed", removed)
+		return
 	}
 	s, err := newServer(dataDir, os.Getenv("SALADBOORU_TOKEN"))
 	if err != nil {

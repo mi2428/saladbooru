@@ -133,6 +133,62 @@ func TestUploadAndDirectDrop(t *testing.T) {
 	}
 }
 
+func TestDedupe(t *testing.T) {
+	s, images, h := setup(t)
+	raw := pngImage(t)
+	for _, name := range []string{"first.png", "duplicate.png", ".upload-in-progress"} {
+		if err := os.WriteFile(filepath.Join(images, name), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink("first.png", filepath.Join(images, "alias.png")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(images, "invalid.txt"), []byte("not an image"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	response := post(t, h, "again.png", raw, false, true)
+	if response.Code != 201 {
+		t.Fatalf("upload: %d", response.Code)
+	}
+	var uploaded struct {
+		Item item `json:"item"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &uploaded); err != nil {
+		t.Fatal(err)
+	}
+	unique, err := os.ReadFile(filepath.Join("testdata", "source.jpg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(images, "unique.jpg"), unique, 0600); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := dedupe(s.images)
+	if err != nil || removed != 2 {
+		t.Fatalf("dedupe: removed=%d err=%v", removed, err)
+	}
+	for _, name := range []string{".upload-in-progress", "alias.png", "invalid.txt", "unique.jpg"} {
+		if _, err := os.Lstat(filepath.Join(images, name)); err != nil {
+			t.Fatalf("removed %s: %v", name, err)
+		}
+	}
+	kept := 0
+	for _, name := range []string{"first.png", "duplicate.png", uploaded.Item.Name} {
+		if _, err := os.Lstat(filepath.Join(images, name)); err == nil {
+			kept++
+		} else if !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+	}
+	if kept != 1 {
+		t.Fatalf("retained %d copies, want 1", kept)
+	}
+	if removed, err := dedupe(s.images); err != nil || removed != 0 {
+		t.Fatalf("second pass: removed=%d err=%v", removed, err)
+	}
+}
+
 func TestExtensionlessShortcutUpload(t *testing.T) {
 	for _, tc := range []struct {
 		fixture, ext, mime string
