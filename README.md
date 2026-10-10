@@ -1,6 +1,6 @@
 # Saladbooru
 
-A minimal, file-only booru variant: drop images into a folder and they appear in the gallery.
+Saladbooru—a nod to [サラダボウル](https://ja.wikipedia.org/wiki/%E3%82%B5%E3%83%A9%E3%83%80%E3%83%9C%E3%82%A6%E3%83%AB_(%E6%BC%AB%E7%94%BB))—is a minimal, file-only booru: drop images into a folder and they appear in the gallery.
 No database, URL import, tags, or generated thumbnails to maintain.
 JPEG, PNG, GIF, WebP, and AVIF are supported; HEIC/HEIF are not.
 The gallery is readable without login; only uploads require a bearer token.
