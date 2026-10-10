@@ -2,9 +2,7 @@ package main
 
 import (
 	"bytes"
-	"encoding/binary"
 	"encoding/json"
-	"hash/crc32"
 	"image"
 	"image/color"
 	"image/gif"
@@ -281,22 +279,6 @@ func TestRejectBrokenFormatsAndMismatches(t *testing.T) {
 	}
 }
 
-func TestRejectPixelLimitBeforeDecode(t *testing.T) {
-	_, images, h := setup(t)
-	raw := pngImage(t)
-	binary.BigEndian.PutUint32(raw[16:20], maxPixels+1)
-	binary.BigEndian.PutUint32(raw[29:33], crc32.ChecksumIEEE(raw[12:29]))
-	if err := os.WriteFile(filepath.Join(images, "huge.png"), raw, 0600); err != nil {
-		t.Fatal(err)
-	}
-	if result := get(t, h, "/images/huge.png"); result.Code != 404 {
-		t.Fatalf("pixel bomb served: %d", result.Code)
-	}
-	if result := post(t, h, "huge.png", raw, false, true); result.Code != 422 {
-		t.Fatalf("pixel bomb uploaded: %d", result.Code)
-	}
-}
-
 func TestPreviewPreservesOriginals(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
@@ -414,7 +396,7 @@ func TestRejectBadUploads(t *testing.T) {
 		{"truncated", "x.png", raw[:len(raw)/2], false, 422},
 		{"extra field", "x.png", raw, true, 400},
 		{"traversal filename", "../escape.png", raw, false, 400},
-		{"too big", "big.png", bytes.Repeat([]byte("x"), maxImage+1), false, 413},
+		{"large invalid file", "big.png", bytes.Repeat([]byte("x"), (12<<20)+1), false, 422},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if w := post(t, h, tc.file, tc.data, tc.extra, true); w.Code != tc.want {

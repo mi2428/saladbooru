@@ -28,9 +28,6 @@ import (
 	"github.com/gen2brain/webp"
 )
 
-const maxImage = 12 << 20
-const maxPixels = 16_000_000
-
 //go:embed static
 var assets embed.FS
 
@@ -100,12 +97,12 @@ func validName(name string) bool {
 // inspect decodes the first frame; later animation frames remain unvalidated.
 func inspect(f *os.File) (string, int, int, image.Image, error) {
 	stat, err := f.Stat()
-	if err != nil || !stat.Mode().IsRegular() || stat.Size() < 1 || stat.Size() > maxImage {
-		return "", 0, 0, nil, errors.New("image must be a regular file of at most 12 MiB")
+	if err != nil || !stat.Mode().IsRegular() || stat.Size() < 1 {
+		return "", 0, 0, nil, errors.New("image must be a non-empty regular file")
 	}
 	config, format, err := image.DecodeConfig(f)
-	if err != nil || imageFormat("x."+format) == "" || config.Width < 1 || config.Height < 1 || int64(config.Width)*int64(config.Height) > maxPixels {
-		return "", 0, 0, nil, errors.New("unsupported image or pixel limit exceeded")
+	if err != nil || imageFormat("x."+format) == "" || config.Width < 1 || config.Height < 1 {
+		return "", 0, 0, nil, errors.New("unsupported image")
 	}
 	if _, err = f.Seek(0, io.SeekStart); err != nil {
 		return "", 0, 0, nil, err
@@ -127,8 +124,8 @@ func inspect(f *os.File) (string, int, int, image.Image, error) {
 		return "", 0, 0, nil, errors.New("image decode failed")
 	}
 	width, height := decoded.Bounds().Dx(), decoded.Bounds().Dy()
-	if width < 1 || height < 1 || int64(width)*int64(height) > maxPixels {
-		return "", 0, 0, nil, errors.New("decoded image exceeds pixel limit")
+	if width < 1 || height < 1 {
+		return "", 0, 0, nil, errors.New("invalid image dimensions")
 	}
 	return format, width, height, decoded, nil
 }
@@ -328,7 +325,6 @@ func (s *server) upload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Expected multipart/form-data", http.StatusUnsupportedMediaType)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxImage+(64<<10))
 	reader, err := r.MultipartReader()
 	if err != nil {
 		http.Error(w, "Invalid multipart request", http.StatusBadRequest)
@@ -357,8 +353,8 @@ func (s *server) upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer s.images.Remove(temp)
-	bytes, copyErr := io.Copy(f, io.LimitReader(part, maxImage+1))
-	if copyErr == nil && bytes <= maxImage {
+	_, copyErr := io.Copy(f, part)
+	if copyErr == nil {
 		_, copyErr = reader.NextPart()
 		if copyErr == nil {
 			copyErr = errors.New("extra multipart field")
@@ -367,19 +363,14 @@ func (s *server) upload(w http.ResponseWriter, r *http.Request) {
 			copyErr = nil
 		}
 	}
-	if copyErr == nil && bytes <= maxImage {
+	if copyErr == nil {
 		copyErr = f.Sync()
 	}
 	if closeErr := f.Close(); copyErr == nil {
 		copyErr = closeErr
 	}
-	if copyErr != nil || bytes > maxImage {
-		var oversized *http.MaxBytesError
-		if bytes > maxImage || errors.As(copyErr, &oversized) {
-			http.Error(w, "Upload exceeds byte limit", http.StatusRequestEntityTooLarge)
-		} else {
-			http.Error(w, "Invalid multipart upload", http.StatusBadRequest)
-		}
+	if copyErr != nil {
+		http.Error(w, "Invalid multipart upload", http.StatusBadRequest)
 		return
 	}
 	input, err := s.images.Open(temp)
