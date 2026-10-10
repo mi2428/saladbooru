@@ -89,8 +89,8 @@ export function imageRatio(post: Pick<Post, 'width' | 'height'>, img: Pick<HTMLI
   return img.naturalWidth && img.naturalHeight ? img.naturalWidth / img.naturalHeight : post.width / post.height;
 }
 
-export function showImage(img: HTMLImageElement, url: string, name: string, onError: () => void): void {
-  let fallback = /\.avif$/i.test(name);
+export function showImage(img: HTMLImageElement, url: string, onError: () => void): void {
+  let fallback = true;
   img.addEventListener('error', () => {
     if (fallback) {
       fallback = false;
@@ -113,7 +113,7 @@ if (typeof document !== 'undefined') {
     const back = document.getElementById('back');
     if (!(full instanceof HTMLImageElement) || !(back instanceof HTMLAnchorElement)) throw new Error('Missing detail elements');
     full.alt = decodeURIComponent(match[1]);
-    showImage(full, `/images/${match[1]}`, match[1], () => { status.textContent = 'This image cannot be displayed'; });
+    showImage(full, `/images/${match[1]}`, () => { status.textContent = 'This image cannot be displayed'; });
   } else {
     const entries: {link: HTMLAnchorElement; ratio: number}[] = [];
     const preferredHeight = installZoom(layout);
@@ -153,7 +153,7 @@ if (typeof document !== 'undefined') {
         link.append(img);
         grid.append(link);
         entries.push(entry);
-        showImage(img, post.url, post.name, () => { status.textContent = 'Some images cannot be displayed'; });
+        showImage(img, post.url, () => { status.textContent = 'Some images cannot be displayed'; });
       }
       layout();
       if (!items.length) status.textContent = 'No images yet';

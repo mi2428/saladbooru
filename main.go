@@ -14,7 +14,7 @@ import (
 	"image/jpeg"
 	_ "image/png"
 	"io"
-	"log"
+	"log/slog"
 	"mime"
 	"net/http"
 	"net/url"
@@ -71,27 +71,8 @@ func newServer(dataDir, token string) (*server, error) {
 	return &server{images: root, token: token}, nil
 }
 
-func imageFormat(name string) string {
-	switch strings.ToLower(filepath.Ext(name)) {
-	case ".jpg", ".jpeg":
-		return "jpeg"
-	case ".png":
-		return "png"
-	case ".gif":
-		return "gif"
-	case ".webp":
-		return "webp"
-	case ".avif":
-		return "avif"
-	}
-	return ""
-}
-
 func validName(name string) bool {
-	if name == "" || strings.HasPrefix(name, ".") || strings.ContainsAny(name, `/\`) || filepath.Base(name) != name {
-		return false
-	}
-	return imageFormat(name) != ""
+	return name != "" && !strings.HasPrefix(name, ".") && !strings.ContainsAny(name, `/\`) && filepath.Base(name) == name
 }
 
 // inspect decodes the first frame; later animation frames remain unvalidated.
@@ -101,7 +82,12 @@ func inspect(f *os.File) (string, int, int, image.Image, error) {
 		return "", 0, 0, nil, errors.New("image must be a non-empty regular file")
 	}
 	config, format, err := image.DecodeConfig(f)
-	if err != nil || imageFormat("x."+format) == "" || config.Width < 1 || config.Height < 1 {
+	if err != nil || config.Width < 1 || config.Height < 1 {
+		return "", 0, 0, nil, errors.New("unsupported image")
+	}
+	switch format {
+	case "jpeg", "png", "gif", "webp", "avif":
+	default:
 		return "", 0, 0, nil, errors.New("unsupported image")
 	}
 	if _, err = f.Seek(0, io.SeekStart); err != nil {
@@ -148,9 +134,6 @@ func (s *server) openImage(name string) (*os.File, item, string, image.Image, er
 		return nil, item{}, "", nil, os.ErrNotExist
 	}
 	format, width, height, decoded, err := inspect(f)
-	if err == nil && imageFormat(name) != format {
-		err = errors.New("image extension does not match content")
-	}
 	if err != nil {
 		f.Close()
 		return nil, item{}, "", nil, err
@@ -163,11 +146,52 @@ func urlEscape(name string) string {
 	return (&url.URL{Path: name}).EscapedPath()
 }
 
+type countedBody struct {
+	io.ReadCloser
+	bytes int64
+}
+
+func (b *countedBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	b.bytes += int64(n)
+	return n, err
+}
+
+type statusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *statusWriter) WriteHeader(status int) {
+	if w.status == 0 {
+		w.status = status
+	}
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *statusWriter) Write(p []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	return w.ResponseWriter.Write(p)
+}
+
+func (s *server) loggedUpload(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	body := &countedBody{ReadCloser: r.Body}
+	r.Body = body
+	recorder := &statusWriter{ResponseWriter: w}
+	defer func() {
+		slog.Info("upload", "status", recorder.status, "bytes_read", body.bytes, "content_length", r.ContentLength, "duration_ms", time.Since(start).Milliseconds())
+	}()
+	s.upload(recorder, r)
+}
+
 func (s *server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.health)
 	mux.HandleFunc("GET /api/posts", s.list)
-	mux.HandleFunc("POST /api/posts", s.upload)
+	mux.HandleFunc("POST /api/posts", s.loggedUpload)
 	mux.HandleFunc("GET /images/{name}", s.media)
 	mux.HandleFunc("GET /preview/{name}", s.preview)
 	mux.HandleFunc("GET /posts/{name}", s.index)
@@ -264,16 +288,16 @@ func (s *server) media(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) preview(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	if imageFormat(name) != "avif" {
-		http.NotFound(w, r)
-		return
-	}
-	f, _, _, decoded, err := s.openImage(name)
+	f, _, contentType, decoded, err := s.openImage(name)
 	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
 	defer f.Close()
+	if contentType != "image/avif" {
+		http.NotFound(w, r)
+		return
+	}
 	var out bytes.Buffer
 	if err := jpeg.Encode(&out, decoded, &jpeg.Options{Quality: 85}); err != nil {
 		http.Error(w, "Preview unavailable", http.StatusServiceUnavailable)
@@ -384,15 +408,8 @@ func (s *server) upload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Unsupported or invalid image", http.StatusUnprocessableEntity)
 		return
 	}
-	if filepath.Ext(filename) != "" && imageFormat(filename) != format {
-		http.Error(w, "Image extension does not match content", http.StatusUnprocessableEntity)
-		return
-	}
-	ext := strings.ToLower(filepath.Ext(filename))
-	if ext == "" {
-		ext = "." + format
-	}
-	if ext == ".jpeg" {
+	ext := "." + format
+	if format == "jpeg" {
 		ext = ".jpg"
 	}
 	name := id + ext
@@ -419,8 +436,13 @@ func main() {
 	}
 	s, err := newServer(dataDir, os.Getenv("SALADBOORU_TOKEN"))
 	if err != nil {
-		log.Fatal(err)
+		slog.Error("startup failed", "error", err)
+		os.Exit(1)
 	}
 	defer s.images.Close()
-	log.Fatal((&http.Server{Addr: ":8080", Handler: s.routes(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 60 * time.Second, WriteTimeout: 120 * time.Second, IdleTimeout: 60 * time.Second}).ListenAndServe())
+	slog.Info("listening", "addr", ":8080")
+	if err := (&http.Server{Addr: ":8080", Handler: s.routes(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 60 * time.Second, WriteTimeout: 120 * time.Second, IdleTimeout: 60 * time.Second}).ListenAndServe(); err != nil {
+		slog.Error("server stopped", "error", err)
+		os.Exit(1)
+	}
 }

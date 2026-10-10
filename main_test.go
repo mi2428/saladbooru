@@ -151,7 +151,7 @@ func TestExtensionlessShortcutUpload(t *testing.T) {
 				name string
 				want int
 			}{
-				{"../Image", 400}, {"", 400}, {"Image.png", 422}, {"Image.xyz", 422},
+				{"../Image", 400}, {"", 400},
 			} {
 				if response := post(t, h, bad.name, raw, false, true); response.Code != bad.want {
 					t.Fatalf("unsafe filename %q: %d, want %d", bad.name, response.Code, bad.want)
@@ -242,7 +242,7 @@ func TestFormats(t *testing.T) {
 	}
 }
 
-func TestRejectBrokenFormatsAndMismatches(t *testing.T) {
+func TestRejectBrokenFormats(t *testing.T) {
 	_, images, h := setup(t)
 	for _, file := range []string{"source.jpg", "source.png", "source.gif", "source.webp", "source.avif"} {
 		t.Run(file, func(t *testing.T) {
@@ -250,17 +250,9 @@ func TestRejectBrokenFormatsAndMismatches(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			other := pngImage(t)
-			if file == "source.png" {
-				other, err = os.ReadFile(filepath.Join("testdata", "source.jpg"))
-				if err != nil {
-					t.Fatal(err)
-				}
-			}
 			for name, content := range map[string][]byte{
 				"broken-" + file: raw[:len(raw)/2],
 				"fake-" + file:   []byte("GIF89a"),
-				"wrong-" + file:  other,
 			} {
 				if err := os.WriteFile(filepath.Join(images, name), content, 0600); err != nil {
 					t.Fatal(err)
@@ -273,9 +265,6 @@ func TestRejectBrokenFormatsAndMismatches(t *testing.T) {
 				}
 			}
 		})
-	}
-	if result := post(t, h, "wrong.jpg", pngImage(t), false, true); result.Code != 422 {
-		t.Fatalf("mismatched upload extension accepted: %d", result.Code)
 	}
 }
 
@@ -418,30 +407,6 @@ func TestRejectBadUploads(t *testing.T) {
 	}
 }
 
-func TestUnsupportedHEICAndHEIF(t *testing.T) {
-	_, images, h := setup(t)
-	for _, ext := range []string{".heic", ".heif"} {
-		name := "unsupported" + ext
-		if response := post(t, h, name, pngImage(t), false, true); response.Code != 422 {
-			t.Fatalf("%s upload: %d", name, response.Code)
-		}
-		if err := os.WriteFile(filepath.Join(images, name), pngImage(t), 0600); err != nil {
-			t.Fatal(err)
-		}
-		for _, prefix := range []string{"/images/", "/preview/", "/posts/"} {
-			if response := get(t, h, prefix+name); response.Code != 404 {
-				t.Fatalf("%s%s served: %d", prefix, name, response.Code)
-			}
-		}
-	}
-	var listing struct {
-		Items []item `json:"items"`
-	}
-	if err := json.Unmarshal(get(t, h, "/api/posts").Body.Bytes(), &listing); err != nil || len(listing.Items) != 0 {
-		t.Fatalf("unsupported files listed: %+v %v", listing.Items, err)
-	}
-}
-
 func TestOnlySafeDirectFiles(t *testing.T) {
 	s, images, h := setup(t)
 	raw := pngImage(t)
@@ -450,7 +415,7 @@ func TestOnlySafeDirectFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, content := range map[string][]byte{
-		"good.png": raw, "fake.png": []byte("<html>bad</html>"), "wrong.jpg": raw, ".upload-hidden.png": raw,
+		"good.png": raw, "fake.png": []byte("<html>bad</html>"), ".upload-hidden.png": raw,
 	} {
 		if err := os.WriteFile(filepath.Join(images, name), content, 0600); err != nil {
 			t.Fatal(err)
@@ -471,7 +436,7 @@ func TestOnlySafeDirectFiles(t *testing.T) {
 	if len(listing.Items) != 1 || listing.Items[0].Name != "good.png" {
 		t.Fatalf("unsafe files listed: %+v", listing.Items)
 	}
-	for _, path := range []string{"/images/escape.png", "/images/alias.png", "/images/fake.png", "/images/wrong.jpg", "/images/..%2Foutside.png"} {
+	for _, path := range []string{"/images/escape.png", "/images/alias.png", "/images/fake.png", "/images/..%2Foutside.png"} {
 		if result := get(t, h, path); result.Code == 200 {
 			t.Fatalf("unsafe path served: %s", path)
 		}

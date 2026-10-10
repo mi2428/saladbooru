@@ -2,21 +2,19 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {layoutRows, installZoom, imageRatio, showImage} from '../src/app.ts';
 
-test('native AVIF first, preview once, then show error', () => {
-  for (const name of ['x.avif', 'x.AVIF', 'x.png']) {
+test('native image first, preview once after decode failure, then show error', () => {
+  for (const name of ['x.avif', 'x.AVIF', 'x.png', 'x.jpg']) {
     let onImageError = () => {};
     const img = {src: '', addEventListener(_type: string, callback: () => void) { onImageError = callback; }} as HTMLImageElement;
     let errors = 0;
-    showImage(img, `/images/my%20${name}`, name, () => { errors++; });
+    showImage(img, `/images/my%20${name}`, () => { errors++; });
     assert.equal(img.src, `/images/my%20${name}`);
     assert.equal(errors, 0); // A browser that decodes natively never requests a JPEG.
     onImageError();
-    assert.equal(img.src, name.endsWith('.png') ? `/images/my%20${name}` : `/preview/my%20${name}`);
-    assert.equal(errors, name.endsWith('.png') ? 1 : 0);
-    if (!name.endsWith('.png')) {
-      onImageError();
-      assert.equal(errors, 1);
-    }
+    assert.equal(img.src, `/preview/my%20${name}`);
+    assert.equal(errors, 0);
+    onImageError();
+    assert.equal(errors, 1);
   }
 });
 
