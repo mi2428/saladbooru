@@ -1,0 +1,7 @@
+.git
+data
+*_test.go
+testdata
+README.md
+base
+/static/app.js

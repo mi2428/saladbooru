@@ -1,0 +1,13 @@
+{
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "tsc --ignoreConfig --target ES2022 --module ES2022 --strict --outDir static src/app.ts",
+    "check": "tsc --noEmit && node --test tests/gallery.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.5",
+    "typescript": "7.0.2"
+  }
+}

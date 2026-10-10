@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Saladbooru</title>
+<link rel="stylesheet" href="/style.css">
+<main>
+  <div id="grid" aria-label="Image gallery"></div>
+  <article id="detail" hidden>
+    <a id="back" href="/" aria-label="Back to gallery">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M20 12H4m7-7-7 7 7 7"/>
+      </svg>
+    </a>
+    <img id="full" alt="Full-size image">
+  </article>
+  <p id="status" role="status"></p>
+</main>
+<script type="module" src="/app.js"></script>
+</html>

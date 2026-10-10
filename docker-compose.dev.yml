@@ -1,0 +1,13 @@
+services:
+  saladbooru:
+    build: .
+    platform: linux/amd64
+    user: "0:0"  # Bind-mounted data remains writable on macOS and Linux.
+    read_only: true
+    ports:
+      - "127.0.0.1:18080:8080"
+    environment:
+      SALADBOORU_DATA_DIR: /data
+      SALADBOORU_TOKEN: saladbooru-dev-only-token-0123456789abcdef
+    volumes:
+      - ./data:/data
