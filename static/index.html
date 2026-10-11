@@ -2,10 +2,22 @@
 <html lang="en">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#f2f5fa">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Saladbooru">
 <title>Saladbooru</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/icon.png">
+<link rel="icon" type="image/svg+xml" href="/icon.svg">
 <link rel="stylesheet" href="/style.css">
 <main>
-  <div id="grid" aria-label="Image gallery"></div>
+  <div id="grid" aria-label="Image gallery">
+    <button id="refresh" type="button" aria-label="Refresh gallery" title="Refresh gallery">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M20 11a8 8 0 1 1-2.4-5.7M20 4v6h-6"/>
+      </svg>
+    </button>
+  </div>
   <article id="detail" role="dialog" aria-modal="true" aria-label="Image viewer" hidden>
     <a id="back" href="/" aria-label="Back to gallery">
       <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">

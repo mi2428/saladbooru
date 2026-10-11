@@ -132,6 +132,12 @@ func TestUploadAndDirectDrop(t *testing.T) {
 	if w := get(t, h, "/posts/my%20photo.png"); w.Code != 200 || !strings.Contains(w.Body.String(), "id=\"back\"") {
 		t.Fatalf("detail/back: %d", w.Code)
 	}
+	if w := get(t, h, "/manifest.json"); w.Code != 200 || w.Header().Get("Content-Type") != "application/json" || !strings.Contains(w.Body.String(), `"display": "standalone"`) {
+		t.Fatalf("home screen manifest: %d", w.Code)
+	}
+	if w := get(t, h, "/icon.png"); w.Code != 200 || w.Header().Get("Content-Type") != "image/png" || w.Header().Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatalf("home screen icon: %d", w.Code)
+	}
 }
 
 func TestListRefreshesChangedFiles(t *testing.T) {

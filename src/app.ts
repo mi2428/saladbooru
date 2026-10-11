@@ -107,10 +107,12 @@ if (typeof document !== 'undefined') {
   const detailStatusElement = document.getElementById('detail-status');
   const fullElement = document.getElementById('full');
   const backElement = document.getElementById('back');
-  if (!gridElement || !detailElement || !statusElement || !detailStatusElement || !(fullElement instanceof HTMLImageElement) || !(backElement instanceof HTMLAnchorElement)) {
+  const refreshElement = document.getElementById('refresh');
+  if (!gridElement || !detailElement || !statusElement || !detailStatusElement || !(fullElement instanceof HTMLImageElement) || !(backElement instanceof HTMLAnchorElement) || !(refreshElement instanceof HTMLButtonElement)) {
     throw new Error('Missing gallery elements');
   }
   const grid = gridElement, detail = detailElement, status = statusElement, detailStatus = detailStatusElement, full = fullElement, back = backElement;
+  refreshElement.addEventListener('click', () => location.reload());
 
   let galleryLoaded = false;
   let openedFromGallery = false;

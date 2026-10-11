@@ -1,0 +1,10 @@
+{
+  "name": "Saladbooru",
+  "short_name": "Saladbooru",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f2f5fa",
+  "theme_color": "#f2f5fa",
+  "icons": [{"src": "/icon.png", "sizes": "192x192", "type": "image/png"}]
+}
