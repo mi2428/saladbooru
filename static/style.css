@@ -6,7 +6,7 @@ body { margin: 0; min-height: 100vh; background: #fff; color: #182331; }
 a:focus-visible, button:focus-visible { outline: 3px solid #4580ef; outline-offset: 2px; }
 #grid a:focus-visible { z-index: 1; outline-offset: -3px; }
 #detail { position: fixed; inset: 0; z-index: 2; display: grid; place-items: center; overflow: hidden; background: #121820; touch-action: none; overscroll-behavior: contain; }
-#full { max-width: 100%; max-height: 100%; object-fit: contain; user-select: none; cursor: grab; }
+#full { max-width: 100%; max-height: 100dvh; object-fit: contain; user-select: none; cursor: grab; }
 #full:active { cursor: grabbing; }
 #back, #refresh { top: calc(env(safe-area-inset-top) + 16px); z-index: 1; display: grid; place-items: center; width: 46px; height: 46px; padding: 0; color: #182331; border: 1px solid #ffffffbd; border-radius: 50%; background: #ffffffd9; box-shadow: 0 6px 20px #28395130, inset 0 1px #fff; backdrop-filter: blur(18px) saturate(140%); -webkit-backdrop-filter: blur(18px) saturate(140%); transition: background .15s; }
 #back { position: absolute; left: calc(env(safe-area-inset-left) + 16px); }
