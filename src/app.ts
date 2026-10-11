@@ -2,7 +2,7 @@ type Post = {name: string; url: string; width: number; height: number};
 
 export function layoutRows(ratios: number[], width: number, targetHeight: number) {
   const positions: {x: number; y: number; width: number; height: number}[] = [];
-  const gap = 8;
+  const gap = 2;
   let y = 0;
   for (let start = 0; start < ratios.length;) {
     let end = start + 1;
