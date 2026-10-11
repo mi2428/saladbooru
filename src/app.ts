@@ -91,34 +91,157 @@ export function imageRatio(post: Pick<Post, 'width' | 'height'>, img: Pick<HTMLI
 
 export function showImage(img: HTMLImageElement, url: string, onError: () => void): void {
   let fallback = true;
-  img.addEventListener('error', () => {
+  img.onerror = () => {
     if (fallback) {
       fallback = false;
       img.src = url.replace(/^\/images\//, '/preview/');
     } else onError();
-  });
+  };
   img.src = url;
 }
 
 if (typeof document !== 'undefined') {
-  const grid = document.getElementById('grid');
-  const detail = document.getElementById('detail');
-  const status = document.getElementById('status');
-  if (!grid || !detail || !status) throw new Error('Missing gallery elements');
-  const match = location.pathname.match(/^\/posts\/([^/]+)$/);
-  if (match) {
-    grid.hidden = true;
+  const gridElement = document.getElementById('grid');
+  const detailElement = document.getElementById('detail');
+  const statusElement = document.getElementById('status');
+  const detailStatusElement = document.getElementById('detail-status');
+  const fullElement = document.getElementById('full');
+  const backElement = document.getElementById('back');
+  if (!gridElement || !detailElement || !statusElement || !detailStatusElement || !(fullElement instanceof HTMLImageElement) || !(backElement instanceof HTMLAnchorElement)) {
+    throw new Error('Missing gallery elements');
+  }
+  const grid = gridElement, detail = detailElement, status = statusElement, detailStatus = detailStatusElement, full = fullElement, back = backElement;
+
+  let galleryLoaded = false;
+  let openedFromGallery = false;
+  let savedScroll = 0;
+  let previousFocus: HTMLElement | null = null;
+  let scale = 1;
+  let panX = 0;
+  let panY = 0;
+  let drag: {x: number; y: number} | null = null;
+  let touch: {x: number; y: number} | null = null;
+  let pinch: {distance: number; scale: number; x: number; y: number; panX: number; panY: number} | null = null;
+  let gestureScale = 1;
+
+  function renderImage() {
+    const maxX = Math.max(0, (full.offsetWidth * scale - detail.clientWidth) / 2);
+    const maxY = Math.max(0, (full.offsetHeight * scale - detail.clientHeight) / 2);
+    panX = Math.max(-maxX, Math.min(maxX, panX));
+    panY = Math.max(-maxY, Math.min(maxY, panY));
+    full.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
+  }
+  function zoom(value: number, x: number, y: number) {
+    const next = Math.max(1, Math.min(8, value));
+    if (!Number.isFinite(next)) return;
+    const factor = next / scale;
+    panX = x - detail.clientWidth / 2 - (x - detail.clientWidth / 2 - panX) * factor;
+    panY = y - detail.clientHeight / 2 - (y - detail.clientHeight / 2 - panY) * factor;
+    scale = next;
+    renderImage();
+  }
+  function openDetail(name: string) {
+    if (detail.hidden) savedScroll = window.scrollY;
+    openedFromGallery = galleryLoaded;
+    grid.inert = true;
     detail.hidden = false;
-    const full = document.getElementById('full');
-    const back = document.getElementById('back');
-    if (!(full instanceof HTMLImageElement) || !(back instanceof HTMLAnchorElement)) throw new Error('Missing detail elements');
-    full.alt = decodeURIComponent(match[1]);
-    showImage(full, `/images/${match[1]}`, () => { status.textContent = 'This image cannot be displayed'; });
-  } else {
+    document.documentElement.style.overflow = 'hidden';
+    scale = 1;
+    panX = panY = 0;
+    renderImage();
+    detailStatus.textContent = '';
+    full.alt = decodeURIComponent(name);
+    showImage(full, `/images/${name}`, () => { detailStatus.textContent = 'This image cannot be displayed'; });
+    back.focus({preventScroll: true});
+  }
+  function closeDetail() {
+    if (detail.hidden) return;
+    detail.hidden = true;
+    grid.inert = false;
+    document.documentElement.style.overflow = '';
+    window.scrollTo(0, savedScroll);
+    previousFocus?.focus({preventScroll: true});
+  }
+  back.addEventListener('click', event => {
+    if (!openedFromGallery) return;
+    event.preventDefault();
+    history.back();
+  });
+  window.addEventListener('popstate', () => {
+    const match = location.pathname.match(/^\/posts\/([^/]+)$/);
+    if (match) openDetail(match[1]);
+    else {
+      closeDetail();
+      loadGallery();
+    }
+  });
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && !detail.hidden) back.click();
+  });
+  detail.addEventListener('wheel', event => {
+    event.preventDefault();
+    event.stopPropagation();
+    const units = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? detail.clientHeight : 1;
+    zoom(scale * Math.exp(-event.deltaY * units / 500), event.clientX, event.clientY);
+  }, {passive: false});
+  detail.addEventListener('dblclick', event => {
+    if (event.target === back || back.contains(event.target as Node)) return;
+    zoom(scale === 1 ? 2 : 1, event.clientX, event.clientY);
+  });
+  detail.addEventListener('pointerdown', event => {
+    if (event.pointerType === 'touch' || event.target !== full || scale === 1) return;
+    drag = {x: event.clientX, y: event.clientY};
+    detail.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  });
+  detail.addEventListener('pointermove', event => {
+    if (!drag) return;
+    panX += event.clientX - drag.x;
+    panY += event.clientY - drag.y;
+    drag = {x: event.clientX, y: event.clientY};
+    renderImage();
+  });
+  detail.addEventListener('pointerup', () => { drag = null; });
+  detail.addEventListener('pointercancel', () => { drag = null; });
+  const center = (touches: TouchList) => ({x: (touches[0].clientX + touches[1].clientX) / 2, y: (touches[0].clientY + touches[1].clientY) / 2});
+  const distance = (touches: TouchList) => Math.hypot(touches[0].clientX - touches[1].clientX, touches[0].clientY - touches[1].clientY);
+  detail.addEventListener('touchstart', event => {
+    event.stopPropagation();
+    if (event.touches.length === 2) pinch = {distance: distance(event.touches), scale, ...center(event.touches), panX, panY};
+    else if (event.touches.length === 1) touch = {x: event.touches[0].clientX, y: event.touches[0].clientY};
+  });
+  detail.addEventListener('touchmove', event => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.touches.length === 2 && pinch?.distance) {
+      const point = center(event.touches);
+      scale = Math.max(1, Math.min(8, pinch.scale * distance(event.touches) / pinch.distance));
+      panX = point.x - detail.clientWidth / 2 - (pinch.x - detail.clientWidth / 2 - pinch.panX) * scale / pinch.scale;
+      panY = point.y - detail.clientHeight / 2 - (pinch.y - detail.clientHeight / 2 - pinch.panY) * scale / pinch.scale;
+      renderImage();
+    } else if (event.touches.length === 1 && touch) {
+      panX += event.touches[0].clientX - touch.x;
+      panY += event.touches[0].clientY - touch.y;
+      touch = {x: event.touches[0].clientX, y: event.touches[0].clientY};
+      renderImage();
+    }
+  }, {passive: false});
+  detail.addEventListener('touchend', event => { event.stopPropagation(); pinch = null; touch = event.touches.length === 1 ? {x: event.touches[0].clientX, y: event.touches[0].clientY} : null; });
+  detail.addEventListener('touchcancel', event => { event.stopPropagation(); pinch = touch = null; });
+  detail.addEventListener('gesturestart', event => { event.preventDefault(); event.stopPropagation(); gestureScale = scale; }, {passive: false});
+  detail.addEventListener('gesturechange', event => {
+    event.preventDefault();
+    event.stopPropagation();
+    zoom(gestureScale * (event as Event & {scale: number}).scale, detail.clientWidth / 2, detail.clientHeight / 2);
+  }, {passive: false});
+  detail.addEventListener('gestureend', event => { event.preventDefault(); event.stopPropagation(); }, {passive: false});
+
+  function loadGallery() {
+    if (galleryLoaded) return;
+    galleryLoaded = true;
     const entries: {link: HTMLAnchorElement; ratio: number}[] = [];
     const preferredHeight = installZoom(layout);
     function layout() {
-      if (!grid) throw new Error('Missing grid');
       const width = grid.clientWidth;
       if (!width) return;
       const {positions, height} = layoutRows(entries.map(entry => entry.ratio), width, preferredHeight());
@@ -159,4 +282,15 @@ if (typeof document !== 'undefined') {
       if (!items.length) status.textContent = 'No images yet';
     }).catch(error => { status.textContent = error instanceof Error ? error.message : String(error); });
   }
+  grid.addEventListener('click', event => {
+    const link = event.target instanceof Element ? event.target.closest('a') : null;
+    if (!(link instanceof HTMLAnchorElement) || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    previousFocus = link;
+    history.pushState(null, '', link.href);
+    openDetail(link.pathname.slice('/posts/'.length));
+  });
+  const match = location.pathname.match(/^\/posts\/([^/]+)$/);
+  if (match) openDetail(match[1]);
+  else loadGallery();
 }

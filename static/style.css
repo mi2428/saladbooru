@@ -1,12 +1,18 @@
-:root { color-scheme: light; font-family: system-ui, sans-serif; }
-body { margin: 0; background: #fff; color: #111; }
+:root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; scrollbar-gutter: stable; }
+body { margin: 0; min-height: 100vh; background: radial-gradient(at 15% 5%, #dceaff, transparent 45%), radial-gradient(at 90% 85%, #f4e5f5, transparent 50%), #f2f5fa; color: #182331; }
 main { padding: 12px; }
 #grid { position: relative; touch-action: pan-y; }
-#grid a { display: block; position: absolute; }
-#grid img { width: 100%; height: 100%; display: block; }
+#grid a { display: block; position: absolute; overflow: hidden; border-radius: 12px; background: #ffffff9c; box-shadow: 0 3px 16px #27344b25, inset 0 1px #ffffffc9; transition: box-shadow .2s, transform .2s; }
+#grid a:hover { transform: translateY(-2px); box-shadow: 0 10px 24px #27344b35, inset 0 1px #ffffffed; }
+#grid img { width: 100%; height: 100%; display: block; object-fit: cover; }
 a:focus-visible { outline: 3px solid #4580ef; outline-offset: 2px; }
-#detail { min-height: 95vh; display: grid; place-items: center; }
-#detail img { max-width: 100%; max-height: 90vh; object-fit: contain; }
-#back { position: fixed; top: 12px; right: 12px; z-index: 1; display: grid; place-items: center; width: 44px; height: 44px; background: #fff; color: #111; border: 1px solid #777; border-radius: 50%; opacity: .6; transition: opacity .15s; }
-#back:hover, #back:focus-visible { opacity: 1; }
+#detail { position: fixed; inset: 0; z-index: 2; display: grid; place-items: center; overflow: hidden; background: #eaf0f9db; backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); touch-action: none; overscroll-behavior: contain; }
+#full { max-width: 100%; max-height: 100%; object-fit: contain; user-select: none; cursor: grab; }
+#full:active { cursor: grabbing; }
+#back, #status:not(:empty), #detail-status:not(:empty) { background: linear-gradient(135deg, #ffffffd9, #ffffff91); border: 1px solid #ffffffbd; box-shadow: 0 8px 30px #28395130, inset 0 1px #fff; backdrop-filter: blur(22px) saturate(160%); -webkit-backdrop-filter: blur(22px) saturate(160%); }
+#back { position: absolute; top: max(16px, env(safe-area-inset-top)); left: max(16px, env(safe-area-inset-left)); z-index: 1; display: grid; place-items: center; width: 46px; height: 46px; color: #182331; border-radius: 50%; transition: background .15s, transform .15s; }
+#back:hover { background: #fff; transform: scale(1.05); }
+#status:not(:empty), #detail-status:not(:empty) { padding: 10px 16px; border-radius: 18px; width: fit-content; }
+#detail-status { position: absolute; bottom: max(16px, env(safe-area-inset-bottom)); left: 16px; }
+@media (prefers-reduced-motion: reduce) { #grid a, #back { transition: none; } }
 [hidden] { display: none !important; }

@@ -4,16 +4,19 @@ import {layoutRows, installZoom, imageRatio, showImage} from '../src/app.ts';
 
 test('native image first, preview once after decode failure, then show error', () => {
   for (const name of ['x.avif', 'x.AVIF', 'x.png', 'x.jpg']) {
-    let onImageError = () => {};
-    const img = {src: '', addEventListener(_type: string, callback: () => void) { onImageError = callback; }} as HTMLImageElement;
+    const img = {src: '', onerror: () => {}} as unknown as HTMLImageElement;
     let errors = 0;
     showImage(img, `/images/my%20${name}`, () => { errors++; });
     assert.equal(img.src, `/images/my%20${name}`);
     assert.equal(errors, 0); // A browser that decodes natively never requests a JPEG.
-    onImageError();
+    img.onerror!(new Event('error'));
     assert.equal(img.src, `/preview/my%20${name}`);
     assert.equal(errors, 0);
-    onImageError();
+    img.onerror!(new Event('error'));
+    assert.equal(errors, 1);
+    showImage(img, '/images/next.avif', () => { errors++; });
+    img.onerror!(new Event('error'));
+    assert.equal(img.src, '/preview/next.avif');
     assert.equal(errors, 1);
   }
 });
