@@ -10,4 +10,4 @@ services:
       SALADBOORU_DATA_DIR: /data
       SALADBOORU_TOKEN: saladbooru-dev-only-token-0123456789abcdef
     volumes:
-      - ./data:/data
+      - ${SALADBOORU_DEV_DATA_DIR:-./data}:/data
