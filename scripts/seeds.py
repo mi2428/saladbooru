@@ -123,11 +123,9 @@ def tags(index: int) -> list[str]:
     return result
 
 
-def request(path: str, data: bytes | None = None, token: str | None = None) -> object:
+def request(path: str, data: bytes | None = None) -> object:
     """Send a JSON request to the local review gallery."""
     headers = {"Content-Type": "application/json"} if data is not None else {}
-    if token is not None:
-        headers["Authorization"] = "Bearer " + token
     req = urllib.request.Request(
         BASE + path,
         data=data,
@@ -173,21 +171,12 @@ def main() -> None:
             "Review gallery must contain only the 1,000 generated images"
         )
     if created:
-        # Read the Compose development token only; never print or persist it.
-        token = next(
-            line.split(":", 1)[1].strip()
-            for line in (ROOT / "docker-compose.dev.yml").read_text().splitlines()
-            if line.strip().startswith("SALADBOORU_TOKEN:")
-        )
-        if len(token) < 32:
-            raise RuntimeError("Development token is unavailable")
         for index in range(1000):
             name = f"review-{index:04d}.png"
             if name in created:
                 request(
                     "/api/posts/" + name + "/tags",
                     json.dumps({"tags": tags(index)}).encode(),
-                    token,
                 )
     print(f"Review seed ready: 1000 images ({len(created)} new; existing tags kept)")
 

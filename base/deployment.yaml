@@ -31,11 +31,6 @@ spec:
           env:
             - name: SALADBOORU_DATA_DIR
               value: /data
-            - name: SALADBOORU_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: saladbooru-credentials
-                  key: SALADBOORU_TOKEN
           readinessProbe:
             httpGet:
               path: /health

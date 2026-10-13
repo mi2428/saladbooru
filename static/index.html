@@ -23,6 +23,7 @@
     </button>
   </header>
   <div id="grid" aria-label="Image gallery"></div>
+  <div id="drop-overlay" role="status" hidden>Drop images to upload</div>
   <article id="detail" role="dialog" aria-modal="true" aria-label="Image viewer" hidden>
     <a id="back" href="/" aria-label="Back to gallery">
       <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12H4m7-7-7 7 7 7"/></svg>
@@ -40,16 +41,13 @@
   </dialog>
   <dialog id="tags-sheet" class="sheet" aria-labelledby="tags-title">
     <h2 id="tags-title" tabindex="-1">Tags</h2>
-    <p id="tags-help">Up to 5 tags per image. Changes are saved only when you press Save.</p>
     <div id="tag-chips" class="tag-chips" aria-label="Current tags"></div>
     <label for="tag-name">Add tag</label>
     <div class="tag-entry">
       <input id="tag-name" type="text" autocomplete="off">
       <button id="tag-add" type="button">Add</button>
     </div>
-    <div id="tag-suggestions" class="tag-options" aria-label="Existing tags"></div>
-    <label for="tag-token">Development token (kept in this tab only)</label>
-    <input id="tag-token" type="password" autocomplete="off" autocapitalize="off" spellcheck="false">
+    <div id="tag-suggestions" class="tag-options" aria-label="Existing tags" hidden></div>
     <p id="tag-error" role="alert"></p>
     <div class="sheet-actions">
       <button id="tag-cancel" type="button">Cancel</button>

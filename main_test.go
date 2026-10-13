@@ -22,8 +22,6 @@ import (
 	"github.com/gen2brain/webp"
 )
 
-const testToken = "this-is-a-long-test-only-token-not-a-secret"
-
 func pngImage(t *testing.T) []byte {
 	t.Helper()
 	var buf bytes.Buffer
@@ -38,7 +36,7 @@ func pngImage(t *testing.T) []byte {
 func setup(t *testing.T) (*server, string, http.Handler) {
 	t.Helper()
 	data := t.TempDir()
-	s, err := newServer(data, testToken)
+	s, err := newServer(data)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,14 +64,11 @@ func form(t *testing.T, filename string, raw []byte, extras bool) (*bytes.Buffer
 	return &body, w.FormDataContentType()
 }
 
-func post(t *testing.T, h http.Handler, filename string, raw []byte, extras bool, auth bool) *httptest.ResponseRecorder {
+func post(t *testing.T, h http.Handler, filename string, raw []byte, extras bool) *httptest.ResponseRecorder {
 	t.Helper()
 	body, contentType := form(t, filename, raw, extras)
 	r := httptest.NewRequest("POST", "/api/posts", body)
 	r.Header.Set("Content-Type", contentType)
-	if auth {
-		r.Header.Set("Authorization", "Bearer "+testToken)
-	}
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	return w
@@ -89,10 +84,7 @@ func get(t *testing.T, h http.Handler, path string) *httptest.ResponseRecorder {
 func TestUploadAndDirectDrop(t *testing.T) {
 	_, images, h := setup(t)
 	raw := pngImage(t)
-	if status := post(t, h, "valid.png", raw, false, false).Code; status != 401 {
-		t.Fatalf("unauthenticated upload: %d", status)
-	}
-	w := post(t, h, "valid.png", raw, false, true)
+	w := post(t, h, "valid.png", raw, false)
 	if w.Code != 201 {
 		t.Fatalf("upload: %d %s", w.Code, w.Body.String())
 	}
@@ -199,7 +191,7 @@ func TestDedupe(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(images, "invalid.txt"), []byte("not an image"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	response := post(t, h, "again.png", raw, false, true)
+	response := post(t, h, "again.png", raw, false)
 	if response.Code != 201 {
 		t.Fatalf("upload: %d", response.Code)
 	}
@@ -261,11 +253,11 @@ func TestExtensionlessShortcutUpload(t *testing.T) {
 			}{
 				{"../Image", 400}, {"", 400},
 			} {
-				if response := post(t, h, bad.name, raw, false, true); response.Code != bad.want {
+				if response := post(t, h, bad.name, raw, false); response.Code != bad.want {
 					t.Fatalf("unsafe filename %q: %d, want %d", bad.name, response.Code, bad.want)
 				}
 			}
-			response := post(t, h, "Image", raw, false, true)
+			response := post(t, h, "Image", raw, false)
 			if response.Code != 201 {
 				t.Fatalf("extensionless upload: %d %s", response.Code, response.Body.String())
 			}
@@ -312,7 +304,7 @@ func TestFormats(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			uploaded := post(t, h, tc.file, raw, false, true)
+			uploaded := post(t, h, tc.file, raw, false)
 			if uploaded.Code != 201 {
 				t.Fatalf("upload: %d %s", uploaded.Code, uploaded.Body.String())
 			}
@@ -368,7 +360,7 @@ func TestRejectBrokenFormats(t *testing.T) {
 				if result := get(t, h, "/images/"+name); result.Code != 404 {
 					t.Fatalf("invalid direct file %s served: %d", name, result.Code)
 				}
-				if result := post(t, h, name, content, false, true); result.Code != 422 {
+				if result := post(t, h, name, content, false); result.Code != 422 {
 					t.Fatalf("invalid upload %s accepted: %d", name, result.Code)
 				}
 			}
@@ -394,7 +386,7 @@ func TestPreviewPreservesOriginals(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(images, tc.name), raw, 0600); err != nil {
 				t.Fatal(err)
 			}
-			upload := post(t, h, tc.name, raw, false, true)
+			upload := post(t, h, tc.name, raw, false)
 			if upload.Code != 201 {
 				t.Fatalf("upload: %d", upload.Code)
 			}
@@ -496,7 +488,7 @@ func TestRejectBadUploads(t *testing.T) {
 		{"large invalid file", "big.png", bytes.Repeat([]byte("x"), (12<<20)+1), false, 422},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if w := post(t, h, tc.file, tc.data, tc.extra, true); w.Code != tc.want {
+			if w := post(t, h, tc.file, tc.data, tc.extra); w.Code != tc.want {
 				t.Fatalf("got %d, want %d", w.Code, tc.want)
 			}
 		})
@@ -507,7 +499,6 @@ func TestRejectBadUploads(t *testing.T) {
 	}
 	r := httptest.NewRequest("POST", "/api/posts", strings.NewReader(`{"url":"https://example.com"}`))
 	r.Header.Set("Content-Type", "application/json")
-	r.Header.Set("Authorization", "Bearer "+testToken)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	if w.Code != 415 {
@@ -560,22 +551,19 @@ func TestOnlySafeDirectFiles(t *testing.T) {
 	}
 }
 
-func TestStartupRejectsMissingTokenAndSymlinkDirectory(t *testing.T) {
-	if _, err := newServer(t.TempDir(), "short"); err == nil {
-		t.Fatal("short token accepted")
-	}
+func TestStartupRejectsSymlinkImageDirectory(t *testing.T) {
 	data := t.TempDir()
 	if err := os.Symlink(t.TempDir(), filepath.Join(data, "images")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := newServer(data, testToken); err == nil {
+	if _, err := newServer(data); err == nil {
 		t.Fatal("symlink image directory accepted")
 	}
 }
 
 func BenchmarkList(b *testing.B) {
 	data := b.TempDir()
-	s, err := newServer(data, testToken)
+	s, err := newServer(data)
 	if err != nil {
 		b.Fatal(err)
 	}

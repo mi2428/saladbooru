@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -143,16 +142,6 @@ func readTags(data *os.Root) (map[string][]string, error) {
 	return tags, nil
 }
 
-func (s *server) authorized(w http.ResponseWriter, r *http.Request) bool {
-	scheme, provided, ok := strings.Cut(r.Header.Get("Authorization"), " ")
-	if ok && strings.EqualFold(scheme, "Bearer") && subtle.ConstantTimeCompare([]byte(provided), []byte(s.token)) == 1 {
-		return true
-	}
-	w.Header().Set("WWW-Authenticate", "Bearer")
-	http.Error(w, "Bearer token required", http.StatusUnauthorized)
-	return false
-}
-
 func (s *server) getTags(w http.ResponseWriter, r *http.Request) {
 	s.tagsMu.RLock()
 	defer s.tagsMu.RUnlock()
@@ -175,9 +164,6 @@ func (s *server) getTags(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) putTags(w http.ResponseWriter, r *http.Request) {
-	if !s.authorized(w, r) {
-		return
-	}
 	contentType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || contentType != "application/json" {
 		http.Error(w, "Expected application/json", http.StatusUnsupportedMediaType)

@@ -36,7 +36,6 @@ var assets embed.FS
 type server struct {
 	images     *os.Root
 	data       *os.Root
-	token      string
 	listMu     sync.Mutex
 	listCache  map[string]cachedItem
 	tagsMu     sync.RWMutex
@@ -58,15 +57,7 @@ type cachedItem struct {
 	stat os.FileInfo
 }
 
-func newServer(dataDir, token string) (*server, error) {
-	if len(token) < 32 || strings.TrimSpace(token) != token {
-		return nil, errors.New("SALADBOORU_TOKEN must be at least 32 characters without surrounding whitespace")
-	}
-	for _, character := range token {
-		if character < 33 || character > 126 {
-			return nil, errors.New("SALADBOORU_TOKEN must contain only printable ASCII without spaces")
-		}
-	}
+func newServer(dataDir string) (*server, error) {
 	root, err := openImages(dataDir)
 	if err != nil {
 		return nil, err
@@ -82,7 +73,7 @@ func newServer(dataDir, token string) (*server, error) {
 		data.Close()
 		return nil, fmt.Errorf("invalid tags.json: %w", err)
 	}
-	return &server{images: root, data: data, tags: tags, token: token}, nil
+	return &server{images: root, data: data, tags: tags}, nil
 }
 
 func openImages(dataDir string) (*os.Root, error) {
@@ -403,9 +394,6 @@ func randomName() (string, error) {
 }
 
 func (s *server) upload(w http.ResponseWriter, r *http.Request) {
-	if !s.authorized(w, r) {
-		return
-	}
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	contentType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || contentType != "multipart/form-data" {
@@ -598,7 +586,7 @@ func main() {
 		slog.Info("dedupe complete", "removed", removed)
 		return
 	}
-	s, err := newServer(dataDir, os.Getenv("SALADBOORU_TOKEN"))
+	s, err := newServer(dataDir)
 	if err != nil {
 		slog.Error("startup failed", "error", err)
 		os.Exit(1)

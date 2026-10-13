@@ -8,6 +8,5 @@ services:
       - "127.0.0.1:18080:8080"
     environment:
       SALADBOORU_DATA_DIR: /data
-      SALADBOORU_TOKEN: saladbooru-dev-only-token-0123456789abcdef
     volumes:
-      - ${SALADBOORU_DEV_DATA_DIR:-./data}:/data
+      - ${SALADBOORU_DEV_DATA_DIR:-./data/tag-review}:/data

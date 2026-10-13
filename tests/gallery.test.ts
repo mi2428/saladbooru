@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {layoutRows, installZoom, imageRatio, showImage} from '../src/app.ts';
+import {layoutRows, installZoom, imageRatio, showImage, uploadFiles} from '../src/app.ts';
 
 test('native image first, preview once after decode failure, then show error', () => {
   for (const name of ['x.avif', 'x.AVIF', 'x.png', 'x.jpg']) {
@@ -18,6 +18,41 @@ test('native image first, preview once after decode failure, then show error', (
     img.onerror!(new Event('error'));
     assert.equal(img.src, '/preview/next.avif');
     assert.equal(errors, 1);
+  }
+});
+
+test('uploads dropped files one at a time and continues after failures', async () => {
+  const originalFetch = globalThis.fetch;
+  const uploaded: string[] = [];
+  let active = 0;
+  let maxActive = 0;
+  globalThis.fetch = async (url, init) => {
+    assert.equal(url, '/api/posts');
+    assert.equal(init?.method, 'POST');
+    assert.equal(new Headers(init?.headers).has('Authorization'), false);
+    assert.ok(init?.body instanceof FormData);
+    const fields = Array.from(init.body.entries());
+    assert.equal(fields.length, 1);
+    assert.equal(fields[0][0], 'file');
+    assert.ok(fields[0][1] instanceof File);
+    const file = fields[0][1] as File;
+    active++;
+    maxActive = Math.max(maxActive, active);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    active--;
+    uploaded.push(file.name);
+    return new Response(null, {status: file.name === 'bad.png' ? 422 : 201});
+  };
+  try {
+    const files = [new File(['1'], 'first.png'), new File(['2'], 'bad.png'), new File(['3'], 'last.png')];
+    const progress: string[] = [];
+    const failed = await uploadFiles(files, (file, index) => progress.push(`${index}:${file.name}`));
+    assert.deepEqual(uploaded, ['first.png', 'bad.png', 'last.png']);
+    assert.equal(maxActive, 1);
+    assert.deepEqual(progress, ['0:first.png', '1:bad.png', '2:last.png']);
+    assert.deepEqual(failed.map(file => file.name), ['bad.png']);
+  } finally {
+    globalThis.fetch = originalFetch;
   }
 });
 

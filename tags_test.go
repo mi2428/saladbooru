@@ -16,13 +16,10 @@ import (
 	"time"
 )
 
-func putTags(t *testing.T, h http.Handler, name, body string, auth bool) *httptest.ResponseRecorder {
+func putTags(t *testing.T, h http.Handler, name, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	r := httptest.NewRequest("PUT", "/api/posts/"+name+"/tags", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
-	if auth {
-		r.Header.Set("Authorization", "Bearer "+testToken)
-	}
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	return w
@@ -42,11 +39,8 @@ func TestTagsAPIAndPersistence(t *testing.T) {
 		t.Fatalf("anonymous read: %d %s", w.Code, w.Body.String())
 	}
 	body := `{"tags":["作品 ひとつ","nsfw"]}`
-	if w := putTags(t, h, "one.png", body, false); w.Code != 401 || strings.Contains(w.Body.String(), testToken) {
-		t.Fatalf("unauthenticated write: %d", w.Code)
-	}
-	if w := putTags(t, h, "one.png", body, true); w.Code != 200 {
-		t.Fatalf("write: %d %s", w.Code, w.Body.String())
+	if w := putTags(t, h, "one.png", body); w.Code != 200 {
+		t.Fatalf("anonymous write: %d %s", w.Code, w.Body.String())
 	}
 	var list struct {
 		Items []item `json:"items"`
@@ -60,7 +54,7 @@ func TestTagsAPIAndPersistence(t *testing.T) {
 	if w := get(t, h, url); w.Code != 200 || !strings.Contains(w.Body.String(), "作品 ひとつ") {
 		t.Fatalf("direct tag read: %d %s", w.Code, w.Body.String())
 	}
-	restarted, err := newServer(data, testToken)
+	restarted, err := newServer(data)
 	if err != nil {
 		t.Fatal("restart: ", err)
 	}
@@ -69,7 +63,7 @@ func TestTagsAPIAndPersistence(t *testing.T) {
 	if w := get(t, restarted.routes(), url); w.Code != 200 || !strings.Contains(w.Body.String(), "作品 ひとつ") {
 		t.Fatalf("lost tags after restart: %d %s", w.Code, w.Body.String())
 	}
-	if w := putTags(t, h, "one.png", `{"tags":[]}`, true); w.Code != 200 {
+	if w := putTags(t, h, "one.png", `{"tags":[]}`); w.Code != 200 {
 		t.Fatalf("remove tags: %d", w.Code)
 	}
 	if w := get(t, h, "/api/posts"); w.Code != 200 || strings.Contains(w.Body.String(), "作品 ひとつ") {
@@ -86,7 +80,7 @@ func TestTagsRejectInvalidAndUnsafeImages(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"link.png", "..%2Fone.png", ".hidden.png", "missing.png"} {
-		if w := putTags(t, h, name, `{"tags":[]}`, true); w.Code == 200 {
+		if w := putTags(t, h, name, `{"tags":[]}`); w.Code == 200 {
 			t.Fatalf("unsafe filename %s accepted", name)
 		}
 	}
@@ -96,7 +90,7 @@ func TestTagsRejectInvalidAndUnsafeImages(t *testing.T) {
 		`{"tags":["X","x"]}`, `{"tags":["` + strings.Repeat("x", 81) + `"]}`,
 		`{"tags":["x","y","z","a","b","c"]}`,
 	} {
-		if w := putTags(t, h, "one.png", body, true); w.Code != 400 {
+		if w := putTags(t, h, "one.png", body); w.Code != 400 {
 			t.Fatalf("invalid tag payload accepted (%d): %s", w.Code, body)
 		}
 	}
@@ -111,13 +105,13 @@ func TestTagSaveFailureAndCorruptStartup(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(images, "one.png"), pngImage(t), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if w := putTags(t, h, "one.png", `{"tags":["before"]}`, true); w.Code != 200 {
+	if w := putTags(t, h, "one.png", `{"tags":["before"]}`); w.Code != 200 {
 		t.Fatalf("initial write: %d", w.Code)
 	}
 	if err := s.data.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if w := putTags(t, h, "one.png", `{"tags":["after"]}`, true); w.Code != 503 {
+	if w := putTags(t, h, "one.png", `{"tags":["after"]}`); w.Code != 503 {
 		t.Fatalf("failed save: %d", w.Code)
 	}
 	if w := get(t, h, "/api/posts/one.png/tags"); w.Code != 503 {
@@ -136,7 +130,7 @@ func TestTagSaveFailureAndCorruptStartup(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(data, "tags.json"), []byte(bad), 0600); err != nil {
 			t.Fatal(err)
 		}
-		if restarted, err := newServer(data, testToken); err == nil {
+		if restarted, err := newServer(data); err == nil {
 			restarted.images.Close()
 			restarted.data.Close()
 			t.Fatalf("corrupt tags accepted: %s", bad)
@@ -148,7 +142,7 @@ func TestTagSaveFailureAndCorruptStartup(t *testing.T) {
 	if err := os.Symlink(filepath.Join(images, "one.png"), filepath.Join(data, "tags.json")); err != nil {
 		t.Fatal(err)
 	}
-	if restarted, err := newServer(data, testToken); err == nil {
+	if restarted, err := newServer(data); err == nil {
 		restarted.images.Close()
 		restarted.data.Close()
 		t.Fatal("symlink tag file accepted")
@@ -162,7 +156,7 @@ func TestTagSaveFailureAndCorruptStartup(t *testing.T) {
 	if err := os.Chmod(filepath.Join(data, "tags.json"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if restarted, err := newServer(data, testToken); err == nil {
+	if restarted, err := newServer(data); err == nil {
 		restarted.images.Close()
 		restarted.data.Close()
 		t.Fatal("public tag file accepted")
@@ -179,7 +173,7 @@ func TestDedupeKeepsTaggedContent(t *testing.T) {
 	}
 	for _, name := range []string{"a.png", "b.png"} {
 		body := `{"tags":["` + name + `"]}`
-		if w := putTags(t, h, name, body, true); w.Code != 200 {
+		if w := putTags(t, h, name, body); w.Code != 200 {
 			t.Fatalf("tag %s: %d", name, w.Code)
 		}
 	}
@@ -269,7 +263,7 @@ func TestTagLockSerializesPUTAndDedupe(t *testing.T) {
 	}
 	holder, release := start("hold")
 	putDone := make(chan int, 1)
-	go func() { putDone <- putTags(t, h, "second.png", `{"tags":["saved"]}`, true).Code }()
+	go func() { putDone <- putTags(t, h, "second.png", `{"tags":["saved"]}`).Code }()
 	select {
 	case code := <-putDone:
 		t.Fatalf("PUT bypassed process lock: %d", code)

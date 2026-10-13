@@ -107,20 +107,38 @@ export function showImage(img: HTMLImageElement, url: string, onError: () => voi
   img.src = url;
 }
 
+export async function uploadFiles(files: readonly File[], onProgress: (file: File, index: number) => void): Promise<File[]> {
+  const failed: File[] = [];
+  for (const [index, file] of files.entries()) {
+    onProgress(file, index);
+    try {
+      const form = new FormData();
+      form.append('file', file, file.name);
+      const response = await fetch('/api/posts', {method: 'POST', body: form});
+      if (!response.ok) throw new Error(`Upload failed (${response.status})`);
+    } catch {
+      failed.push(file);
+    }
+  }
+  return failed;
+}
+
 if (typeof document !== 'undefined') {
   const gridElement = document.getElementById('grid');
   const detailElement = document.getElementById('detail');
   const statusElement = document.getElementById('status');
   const detailStatusElement = document.getElementById('detail-status');
+  const dropOverlayElement = document.getElementById('drop-overlay');
   const fullElement = document.getElementById('full');
   const backElement = document.getElementById('back');
   const refreshElement = document.getElementById('refresh');
-  if (!gridElement || !detailElement || !statusElement || !detailStatusElement || !(fullElement instanceof HTMLImageElement) || !(backElement instanceof HTMLAnchorElement) || !(refreshElement instanceof HTMLButtonElement)) {
+  if (!gridElement || !detailElement || !statusElement || !detailStatusElement || !(dropOverlayElement instanceof HTMLDivElement) || !(fullElement instanceof HTMLImageElement) || !(backElement instanceof HTMLAnchorElement) || !(refreshElement instanceof HTMLButtonElement)) {
     throw new Error('Missing gallery elements');
   }
   const grid = gridElement, detail = detailElement, status = statusElement, detailStatus = detailStatusElement, full = fullElement, back = backElement;
   refreshElement.addEventListener('click', () => location.reload());
   const element = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+  const dropOverlay = dropOverlayElement;
   const tagToolbar = element<HTMLElement>('tag-toolbar');
   const tagOptions = element<HTMLDivElement>('tag-options');
   const clearFilters = element<HTMLButtonElement>('clear-filters');
@@ -132,7 +150,6 @@ if (typeof document !== 'undefined') {
   const chips = element<HTMLDivElement>('tag-chips');
   const suggestions = element<HTMLDivElement>('tag-suggestions');
   const nameInput = element<HTMLInputElement>('tag-name');
-  const tokenInput = element<HTMLInputElement>('tag-token');
   const tagError = element<HTMLParagraphElement>('tag-error');
   const saveButton = element<HTMLButtonElement>('tag-save');
   const tagsTitle = element<HTMLHeadingElement>('tags-title');
@@ -145,15 +162,37 @@ if (typeof document !== 'undefined') {
   let currentName = '';
   let currentTags: Tag[] = [];
   let draft: Tag[] = [];
-  let token = '';
   let saving = false;
   let posts: Post[] = [];
   let suggestionPool: Tag[] = [];
   const selected = new Map<string, Tag>();
   const entries: {post: Post; tile: HTMLDivElement; link: HTMLAnchorElement; ratio: number; dots: HTMLDivElement; dotLimit: number; renderedTags?: Tag[]; renderedFilter?: string}[] = [];
+  const pendingUploads: File[] = [];
+  let uploading = false;
   let preferredHeight = () => 220;
   const key = (tag: Tag) => tag.toLowerCase();
   const uniqueTags = (tags: Tag[]) => Array.from(new Map(tags.map(tag => [key(tag), tag])).values()).sort((a, b) => a.localeCompare(b));
+  function createEntry(post: Post): typeof entries[number] {
+    const tile = document.createElement('div');
+    const link = document.createElement('a');
+    const img = document.createElement('img');
+    const dots = document.createElement('div');
+    dots.className = 'tag-dots';
+    tile.className = 'gallery-tile';
+    link.className = 'gallery-link';
+    link.href = `/posts/${encodeURIComponent(post.name)}`;
+    img.alt = post.name;
+    img.loading = 'lazy';
+    const entry = {post, tile, link, ratio: imageRatio(post, img), dots, dotLimit: 0};
+    img.addEventListener('load', () => {
+      entry.ratio = imageRatio(post, img);
+      scheduleLayout();
+    });
+    link.append(img);
+    tile.append(link, dots);
+    showImage(img, post.url, () => { status.textContent = 'Some images cannot be displayed'; });
+    return entry;
+  }
   const tagColor = (tag: Tag) => {
     let hash = 2166136261;
     for (const char of key(tag)) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
@@ -256,6 +295,27 @@ if (typeof document !== 'undefined') {
     tagOptions.scrollLeft = 0;
     focused?.focus({preventScroll: true});
   }
+  function syncGallery(items: Post[]) {
+    const existing = new Map(entries.map(entry => [entry.post.name, entry] as const));
+    const updated = items.map(post => {
+      const entry = existing.get(post.name);
+      if (entry) {
+        existing.delete(post.name);
+        entry.post = post;
+        return entry;
+      }
+      const added = createEntry(post);
+      grid.append(added.tile);
+      return added;
+    });
+    for (const entry of existing.values()) entry.tile.remove();
+    entries.splice(0, entries.length, ...updated);
+    posts = items;
+    const scrollLeft = tagOptions.scrollLeft;
+    renderTagBar();
+    tagOptions.scrollLeft = scrollLeft;
+    layout();
+  }
   function toggleFilter(tag: Tag) {
     const id = key(tag);
     if (selected.has(id)) selected.delete(id);
@@ -284,7 +344,9 @@ if (typeof document !== 'undefined') {
   function renderSuggestions() {
     suggestions.replaceChildren();
     const query = nameInput.value.trim().toLowerCase();
-    for (const tag of uniqueTags(suggestionPool).filter(tag => !draft.some(current => key(tag) === key(current)) && (!query || tag.toLowerCase().includes(query))).slice(0, 24)) {
+    const matches = query ? uniqueTags(suggestionPool).filter(tag => !draft.some(current => key(tag) === key(current)) && tag.toLowerCase().includes(query)).slice(0, 8) : [];
+    suggestions.hidden = matches.length === 0;
+    for (const tag of matches) {
       suggestions.append(option(tag, false, () => addTag(tag)));
     }
   }
@@ -322,7 +384,7 @@ if (typeof document !== 'undefined') {
   });
   element<HTMLButtonElement>('tag-cancel').addEventListener('click', () => tagsSheet.close());
   tagsSheet.addEventListener('cancel', event => { if (saving) event.preventDefault(); });
-  tagsSheet.addEventListener('close', () => { tokenInput.value = ''; sheetFocus?.focus({preventScroll: true}); });
+  tagsSheet.addEventListener('close', () => sheetFocus?.focus({preventScroll: true}));
   tagsOpen.addEventListener('click', () => {
     sheetFocus = tagsOpen;
     draft = currentTags.slice();
@@ -353,21 +415,15 @@ if (typeof document !== 'undefined') {
   });
   saveButton.addEventListener('click', async () => {
     if (saving) return;
-    const provided = tokenInput.value || token;
-    if (!provided) { tagError.textContent = 'Enter the development token'; tokenInput.focus(); return; }
     saving = true;
     tagError.textContent = '';
-    tagsSheet.querySelectorAll<HTMLInputElement | HTMLButtonElement | HTMLSelectElement>('input, button, select').forEach(control => { control.disabled = true; });
+    tagsSheet.querySelectorAll<HTMLInputElement | HTMLButtonElement>('input, button').forEach(control => { control.disabled = true; });
     try {
       const response = await fetch(`/api/posts/${encodeURIComponent(currentName)}/tags`, {
-        method: 'PUT', headers: {'Content-Type': 'application/json', 'Authorization': `Bearer ${provided}`}, body: JSON.stringify({tags: draft}),
+        method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({tags: draft}),
       });
-      if (!response.ok) {
-        if (response.status === 401) token = '';
-        throw new Error(response.status === 401 ? 'Invalid token; enter it again' : `Could not save tags (${response.status})`);
-      }
+      if (!response.ok) throw new Error(`Could not save tags (${response.status})`);
       const result = await response.json() as {tags: Tag[]};
-      token = provided;
       currentTags = result.tags;
       const post = posts.find(post => post.name === currentName);
       if (post) post.tags = result.tags;
@@ -378,7 +434,7 @@ if (typeof document !== 'undefined') {
       tagError.textContent = error instanceof Error ? error.message : 'Could not save tags';
     } finally {
       saving = false;
-      tagsSheet.querySelectorAll<HTMLInputElement | HTMLButtonElement | HTMLSelectElement>('input, button, select').forEach(control => { control.disabled = false; });
+      tagsSheet.querySelectorAll<HTMLInputElement | HTMLButtonElement>('input, button').forEach(control => { control.disabled = false; });
     }
   });
 
@@ -387,6 +443,45 @@ if (typeof document !== 'undefined') {
     if (!response.ok) throw new Error(`Failed to load images (${response.status})`);
     const data = await response.json() as {items: Post[]};
     return data.items;
+  }
+
+  async function processUploads() {
+    if (uploading) return;
+    uploading = true;
+    let uploaded = 0;
+    const failed: File[] = [];
+    try {
+      while (pendingUploads.length) {
+        const batch = pendingUploads.splice(0);
+        const batchFailed = await uploadFiles(batch, (file, index) => {
+          status.textContent = `Uploading ${index + 1} of ${batch.length}: ${file.name}`;
+        });
+        uploaded += batch.length - batchFailed.length;
+        failed.push(...batchFailed);
+      }
+      if (uploaded) {
+        try {
+          syncGallery(await fetchPosts());
+        } catch {
+          status.textContent = `Uploaded ${uploaded} ${uploaded === 1 ? 'image' : 'images'}, but could not refresh the gallery.`;
+          return;
+        }
+      }
+      if (failed.length) {
+        const names = failed.slice(0, 3).map(file => file.name).join(', ');
+        const more = failed.length > 3 ? `, and ${failed.length - 3} more` : '';
+        status.textContent = `Uploaded ${uploaded} ${uploaded === 1 ? 'image' : 'images'}; ${failed.length} failed: ${names}${more}.`;
+      } else {
+        status.textContent = `Uploaded ${uploaded} ${uploaded === 1 ? 'image' : 'images'}.`;
+      }
+    } finally {
+      uploading = false;
+      if (pendingUploads.length) void processUploads();
+    }
+  }
+  function queueUploads(files: File[]) {
+    pendingUploads.push(...files);
+    void processUploads();
   }
 
   let scale = 1;
@@ -538,33 +633,7 @@ if (typeof document !== 'undefined') {
         layout();
       }
     }).observe(grid);
-    fetchPosts().then(items => {
-      posts = items;
-      for (const post of posts) {
-        const tile = document.createElement('div');
-        const link = document.createElement('a');
-        const img = document.createElement('img');
-        const dots = document.createElement('div');
-        dots.className = 'tag-dots';
-        tile.className = 'gallery-tile';
-        link.className = 'gallery-link';
-        link.href = `/posts/${encodeURIComponent(post.name)}`;
-        img.alt = post.name;
-        img.loading = 'lazy';
-        const entry = {post, tile, link, ratio: imageRatio(post, img), dots, dotLimit: 0};
-        img.addEventListener('load', () => {
-          entry.ratio = imageRatio(post, img);
-          scheduleLayout();
-        });
-        link.append(img);
-        tile.append(link, dots);
-        grid.append(tile);
-        entries.push(entry);
-        showImage(img, post.url, () => { status.textContent = 'Some images cannot be displayed'; });
-      }
-      layout();
-      renderTagBar();
-    }).catch(error => { status.textContent = error instanceof Error ? error.message : String(error); });
+    fetchPosts().then(syncGallery).catch(error => { status.textContent = error instanceof Error ? error.message : String(error); });
   }
   grid.addEventListener('click', event => {
     const link = event.target instanceof Element ? event.target.closest('a') : null;
@@ -575,6 +644,35 @@ if (typeof document !== 'undefined') {
     history.pushState(null, '', link.href);
     openDetail(link.pathname.slice('/posts/'.length));
   });
+  const acceptsFiles = (event: DragEvent) => event.dataTransfer?.types.includes('Files') ?? false;
+  const galleryAcceptsDrops = () => location.pathname === '/' && detail.hidden && !tagsSheet.open && !tileTagsSheet.open;
+  let dragDepth = 0;
+  const clearDropOverlay = () => { dragDepth = 0; dropOverlay.hidden = true; };
+  document.addEventListener('dragenter', event => {
+    if (!galleryAcceptsDrops() || !acceptsFiles(event)) return;
+    event.preventDefault();
+    dragDepth++;
+    dropOverlay.hidden = false;
+  });
+  document.addEventListener('dragover', event => {
+    if (!galleryAcceptsDrops() || !acceptsFiles(event)) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+  });
+  document.addEventListener('dragleave', event => {
+    if (!galleryAcceptsDrops() || !acceptsFiles(event)) return;
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (!dragDepth) dropOverlay.hidden = true;
+  });
+  document.addEventListener('drop', event => {
+    if (!galleryAcceptsDrops()) return;
+    const files = Array.from(event.dataTransfer?.files ?? []);
+    if (!acceptsFiles(event) && !files.length) return;
+    event.preventDefault();
+    clearDropOverlay();
+    if (files.length) queueUploads(files);
+  });
+  window.addEventListener('blur', clearDropOverlay);
   const match = location.pathname.match(/^\/posts\/([^/]+)$/);
   if (match) openDetail(match[1]);
   else loadGallery();
