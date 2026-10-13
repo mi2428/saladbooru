@@ -42,7 +42,7 @@ func setup(t *testing.T) (*server, string, http.Handler) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { s.images.Close() })
+	t.Cleanup(func() { s.images.Close(); s.data.Close() })
 	return s, filepath.Join(data, "images"), s.routes()
 }
 
@@ -216,7 +216,7 @@ func TestDedupe(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(images, "unique.jpg"), unique, 0600); err != nil {
 		t.Fatal(err)
 	}
-	removed, err := dedupe(s.images)
+	removed, err := dedupe(s.images, s.tags)
 	if err != nil || removed != 2 {
 		t.Fatalf("dedupe: removed=%d err=%v", removed, err)
 	}
@@ -236,7 +236,7 @@ func TestDedupe(t *testing.T) {
 	if kept != 1 {
 		t.Fatalf("retained %d copies, want 1", kept)
 	}
-	if removed, err := dedupe(s.images); err != nil || removed != 0 {
+	if removed, err := dedupe(s.images, s.tags); err != nil || removed != 0 {
 		t.Fatalf("second pass: removed=%d err=%v", removed, err)
 	}
 }
@@ -579,7 +579,7 @@ func BenchmarkList(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	b.Cleanup(func() { s.images.Close() })
+	b.Cleanup(func() { s.images.Close(); s.data.Close() })
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, image.NewRGBA(image.Rect(0, 0, 256, 256))); err != nil {
 		b.Fatal(err)

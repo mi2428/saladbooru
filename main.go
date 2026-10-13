@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/subtle"
 	"embed"
 	"encoding/hex"
 	"encoding/json"
@@ -35,10 +34,14 @@ import (
 var assets embed.FS
 
 type server struct {
-	images    *os.Root
-	token     string
-	listMu    sync.Mutex
-	listCache map[string]cachedItem
+	images     *os.Root
+	data       *os.Root
+	token      string
+	listMu     sync.Mutex
+	listCache  map[string]cachedItem
+	tagsMu     sync.RWMutex
+	tags       map[string][]string
+	tagsFailed bool
 }
 
 type item struct {
@@ -47,6 +50,7 @@ type item struct {
 	Width    int       `json:"width"`
 	Height   int       `json:"height"`
 	Modified time.Time `json:"modified_at"`
+	Tags     []string  `json:"tags"`
 }
 
 type cachedItem struct {
@@ -67,7 +71,18 @@ func newServer(dataDir, token string) (*server, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &server{images: root, token: token}, nil
+	data, err := os.OpenRoot(dataDir)
+	if err != nil {
+		root.Close()
+		return nil, err
+	}
+	tags, err := readTags(data)
+	if err != nil {
+		root.Close()
+		data.Close()
+		return nil, fmt.Errorf("invalid tags.json: %w", err)
+	}
+	return &server{images: root, data: data, tags: tags, token: token}, nil
 }
 
 func openImages(dataDir string) (*os.Root, error) {
@@ -206,6 +221,8 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /health", s.health)
 	mux.HandleFunc("GET /api/posts", s.list)
 	mux.HandleFunc("POST /api/posts", s.loggedUpload)
+	mux.HandleFunc("GET /api/posts/{name}/tags", s.getTags)
+	mux.HandleFunc("PUT /api/posts/{name}/tags", s.putTags)
 	mux.HandleFunc("GET /images/{name}", s.media)
 	mux.HandleFunc("GET /preview/{name}", s.preview)
 	mux.HandleFunc("GET /posts/{name}", s.index)
@@ -220,6 +237,13 @@ func (s *server) routes() http.Handler {
 }
 
 func (s *server) health(w http.ResponseWriter, _ *http.Request) {
+	s.tagsMu.RLock()
+	failed := s.tagsFailed
+	s.tagsMu.RUnlock()
+	if failed {
+		http.Error(w, "Tag storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
 	name, err := randomName()
 	if err == nil {
 		var f *os.File
@@ -242,6 +266,13 @@ func (s *server) health(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *server) list(w http.ResponseWriter, _ *http.Request) {
+	s.tagsMu.RLock()
+	if s.tagsFailed {
+		s.tagsMu.RUnlock()
+		http.Error(w, "Tag storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	defer s.tagsMu.RUnlock()
 	dir, err := s.images.Open(".")
 	if err != nil {
 		http.Error(w, "Storage unavailable", http.StatusServiceUnavailable)
@@ -282,6 +313,9 @@ func (s *server) list(w http.ResponseWriter, _ *http.Request) {
 	}
 	s.listCache = cache
 	s.listMu.Unlock()
+	for i := range items {
+		items[i].Tags = append([]string{}, s.tags[items[i].Name]...)
+	}
 	sort.Slice(items, func(i, j int) bool {
 		if items[i].Modified.Equal(items[j].Modified) {
 			return items[i].Name > items[j].Name
@@ -369,10 +403,7 @@ func randomName() (string, error) {
 }
 
 func (s *server) upload(w http.ResponseWriter, r *http.Request) {
-	scheme, provided, ok := strings.Cut(r.Header.Get("Authorization"), " ")
-	if !ok || !strings.EqualFold(scheme, "Bearer") || subtle.ConstantTimeCompare([]byte(provided), []byte(s.token)) != 1 {
-		w.Header().Set("WWW-Authenticate", "Bearer")
-		http.Error(w, "Bearer token required", http.StatusUnauthorized)
+	if !s.authorized(w, r) {
 		return
 	}
 	w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -461,7 +492,7 @@ func (s *server) upload(w http.ResponseWriter, r *http.Request) {
 	}{item{Name: name, URL: "/images/" + name, Width: width, Height: height, Modified: stat.ModTime()}})
 }
 
-func dedupe(images *os.Root) (int, error) {
+func dedupe(images *os.Root, tags map[string][]string) (int, error) {
 	dir, err := images.Open(".")
 	if err != nil {
 		return 0, err
@@ -472,7 +503,7 @@ func dedupe(images *os.Root) (int, error) {
 		return 0, err
 	}
 	s := &server{images: images}
-	seen := make(map[[sha256.Size]byte]struct{})
+	seen := make(map[[sha256.Size]byte]bool)
 	removed := 0
 	for _, entry := range entries {
 		name := entry.Name()
@@ -497,8 +528,12 @@ func dedupe(images *os.Root) (int, error) {
 		}
 		var digest [sha256.Size]byte
 		copy(digest[:], hash.Sum(nil))
-		if _, exists := seen[digest]; !exists {
-			seen[digest] = struct{}{}
+		// Keep every tagged copy: removing one would leave stale filename metadata.
+		if len(tags[name]) != 0 {
+			continue
+		}
+		if !seen[digest] {
+			seen[digest] = true
 			continue
 		}
 		current, err := images.Lstat(name)
@@ -514,6 +549,19 @@ func dedupe(images *os.Root) (int, error) {
 		removed++
 	}
 	return removed, nil
+}
+
+func dedupeLocked(images, data *os.Root) (int, error) {
+	lock, err := lockTags(data)
+	if err != nil {
+		return 0, err
+	}
+	defer lock.Close()
+	tags, err := readTags(data)
+	if err != nil {
+		return 0, err
+	}
+	return dedupe(images, tags)
 }
 
 func main() {
@@ -534,7 +582,14 @@ func main() {
 			slog.Error("dedupe failed", "error", err)
 			os.Exit(1)
 		}
-		removed, err := dedupe(images)
+		data, err := os.OpenRoot(dataDir)
+		if err != nil {
+			images.Close()
+			slog.Error("dedupe failed", "error", err)
+			os.Exit(1)
+		}
+		removed, err := dedupeLocked(images, data)
+		data.Close()
 		images.Close()
 		if err != nil {
 			slog.Error("dedupe failed", "error", err)
@@ -549,6 +604,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer s.images.Close()
+	defer s.data.Close()
 	slog.Info("listening", "addr", ":8080")
 	if err := (&http.Server{Addr: ":8080", Handler: s.routes(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 60 * time.Second, WriteTimeout: 120 * time.Second, IdleTimeout: 60 * time.Second}).ListenAndServe(); err != nil {
 		slog.Error("server stopped", "error", err)
