@@ -11,22 +11,51 @@
 <link rel="icon" type="image/svg+xml" href="/icon.svg">
 <link rel="stylesheet" href="/style.css">
 <main>
-  <div id="grid" aria-label="Image gallery">
+  <header id="tag-toolbar">
+    <nav id="tag-bar" aria-label="Filter by tag">
+      <div id="tag-options" role="group" aria-label="Tags"></div>
+      <button id="clear-filters" type="button" aria-label="Clear tag filters" title="Clear tag filters" hidden>
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+      </button>
+    </nav>
     <button id="refresh" type="button" aria-label="Refresh gallery" title="Refresh gallery">
-      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <path d="M20 11a8 8 0 1 1-2.4-5.7M20 4v6h-6"/>
-      </svg>
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 1-2.4-5.7M20 4v6h-6"/></svg>
     </button>
-  </div>
+  </header>
+  <div id="grid" aria-label="Image gallery"></div>
   <article id="detail" role="dialog" aria-modal="true" aria-label="Image viewer" hidden>
     <a id="back" href="/" aria-label="Back to gallery">
-      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <path d="M20 12H4m7-7-7 7 7 7"/>
-      </svg>
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12H4m7-7-7 7 7 7"/></svg>
     </a>
     <img id="full" alt="Full-size image" draggable="false">
+    <button id="tags-open" class="glass" type="button" aria-label="Edit image tags" title="Edit image tags" aria-haspopup="dialog" disabled>
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3.4 13.4a2 2 0 0 1 0-2.8l7.2-7.2A2 2 0 0 1 12 2.8h7.2a2 2 0 0 1 2 2V12a2 2 0 0 1-.6 1.4Z"/><circle cx="16.5" cy="7.5" r="1"/></svg>
+    </button>
     <p id="detail-status" role="status"></p>
   </article>
+  <dialog id="tile-tags-sheet" class="sheet" aria-labelledby="tile-tags-title">
+    <h2 id="tile-tags-title" tabindex="-1">Tags</h2>
+    <div id="tile-tags-options" class="tag-options"></div>
+    <button id="tile-tags-done" type="button">Done</button>
+  </dialog>
+  <dialog id="tags-sheet" class="sheet" aria-labelledby="tags-title">
+    <h2 id="tags-title" tabindex="-1">Tags</h2>
+    <p id="tags-help">Up to 5 tags per image. Changes are saved only when you press Save.</p>
+    <div id="tag-chips" class="tag-chips" aria-label="Current tags"></div>
+    <label for="tag-name">Add tag</label>
+    <div class="tag-entry">
+      <input id="tag-name" type="text" autocomplete="off">
+      <button id="tag-add" type="button">Add</button>
+    </div>
+    <div id="tag-suggestions" class="tag-options" aria-label="Existing tags"></div>
+    <label for="tag-token">Development token (kept in this tab only)</label>
+    <input id="tag-token" type="password" autocomplete="off" autocapitalize="off" spellcheck="false">
+    <p id="tag-error" role="alert"></p>
+    <div class="sheet-actions">
+      <button id="tag-cancel" type="button">Cancel</button>
+      <button id="tag-save" type="button">Save</button>
+    </div>
+  </dialog>
   <p id="status" role="status"></p>
 </main>
 <script type="module" src="/app.js"></script>

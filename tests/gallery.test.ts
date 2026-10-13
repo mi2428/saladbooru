@@ -41,7 +41,7 @@ test('ordinary scroll stays native while modified wheel and two-finger pinch ref
   const layouts: number[] = [];
   const documentBefore = globalThis.document;
   const windowBefore = globalThis.window;
-  globalThis.document = {elementFromPoint: () => null} as unknown as Document;
+  globalThis.document = {elementFromPoint: () => null, querySelector: () => null, getElementById: () => ({hidden: true})} as unknown as Document;
   globalThis.window = {innerHeight: 700, addEventListener(type: string, fn: EventListener) { handlers.set(type, fn); }} as unknown as Window & typeof globalThis;
   try {
     const height = installZoom(() => layouts.push(height()));
