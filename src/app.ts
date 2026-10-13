@@ -142,9 +142,6 @@ if (typeof document !== 'undefined') {
   const tagToolbar = element<HTMLElement>('tag-toolbar');
   const tagOptions = element<HTMLDivElement>('tag-options');
   const clearFilters = element<HTMLButtonElement>('clear-filters');
-  const tileTagsSheet = element<HTMLDialogElement>('tile-tags-sheet');
-  const tileTagsOptions = element<HTMLDivElement>('tile-tags-options');
-  const tileTagsTitle = element<HTMLHeadingElement>('tile-tags-title');
   const tagsOpen = element<HTMLButtonElement>('tags-open');
   const tagsSheet = element<HTMLDialogElement>('tags-sheet');
   const chips = element<HTMLDivElement>('tag-chips');
@@ -238,21 +235,6 @@ if (typeof document !== 'undefined') {
       button.addEventListener('click', () => toggleFilter(tag));
       entry.dots.append(button);
     }
-    if (entry.post.tags.length > limit) {
-      const hiddenTags = entry.post.tags.slice(limit);
-      const more = document.createElement('button');
-      more.type = 'button';
-      more.className = 'tag-more';
-      more.textContent = `+${entry.post.tags.length - limit}`;
-      more.setAttribute('aria-label', `Show ${hiddenTags.length} more tags`);
-      more.addEventListener('click', () => {
-        sheetFocus = more;
-        tileTagsOptions.replaceChildren(...hiddenTags.map(tag => option(tag, selected.has(key(tag)), () => { toggleFilter(tag); tileTagsSheet.close(); })));
-        tileTagsSheet.showModal();
-        tileTagsTitle.focus({preventScroll: true});
-      });
-      entry.dots.append(more);
-    }
     entry.link.setAttribute('aria-label', `${entry.post.name}${entry.post.tags.length ? ', tags: ' + entry.post.tags.join(', ') : ''}`);
   }
 
@@ -329,12 +311,6 @@ if (typeof document !== 'undefined') {
     layout();
     tagOptions.querySelector<HTMLButtonElement>('button')?.focus({preventScroll: true});
   });
-  element<HTMLButtonElement>('tile-tags-done').addEventListener('click', () => tileTagsSheet.close());
-  tileTagsSheet.addEventListener('close', () => {
-    if (sheetFocus && !sheetFocus.closest('.gallery-tile[hidden]')) sheetFocus.focus({preventScroll: true});
-    else tagOptions.querySelector<HTMLButtonElement>('button')?.focus({preventScroll: true});
-  });
-
   function validateDraft(tag: Tag): string {
     if (!tag || tag.trim() !== tag || Array.from(tag).length > 80 || /[\p{Cc}\p{Cf}]/u.test(tag)) return 'Name must be 1–80 characters without outer spaces';
     if (draft.length >= 5) return 'Maximum 5 tags per image';
@@ -558,7 +534,7 @@ if (typeof document !== 'undefined') {
     }
   });
   document.addEventListener('keydown', event => {
-    if (event.key === 'Escape' && !detail.hidden && !tagsSheet.open && !tileTagsSheet.open) back.click();
+    if (event.key === 'Escape' && !detail.hidden && !tagsSheet.open) back.click();
   });
   detail.addEventListener('wheel', event => {
     event.preventDefault();
@@ -645,7 +621,7 @@ if (typeof document !== 'undefined') {
     openDetail(link.pathname.slice('/posts/'.length));
   });
   const acceptsFiles = (event: DragEvent) => event.dataTransfer?.types.includes('Files') ?? false;
-  const galleryAcceptsDrops = () => location.pathname === '/' && detail.hidden && !tagsSheet.open && !tileTagsSheet.open;
+  const galleryAcceptsDrops = () => location.pathname === '/' && detail.hidden && !tagsSheet.open;
   let dragDepth = 0;
   const clearDropOverlay = () => { dragDepth = 0; dropOverlay.hidden = true; };
   document.addEventListener('dragenter', event => {

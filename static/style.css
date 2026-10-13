@@ -14,12 +14,11 @@ body { margin: 0; min-height: 100vh; background: #fff; color: #182331; }
 .gallery-link img { display: block; width: 100%; height: 100%; object-fit: cover; }
 :focus { outline: none; }
 :focus-visible { outline: none; box-shadow: 0 0 0 2px #526279a6; }
-#tags-title:focus, #tile-tags-title:focus { box-shadow: none; }
+#tags-title:focus { box-shadow: none; }
 .gallery-link:focus-visible { z-index: 1; box-shadow: inset 0 0 0 2px #526279; }
 .tag-dots { position: absolute; right: 2px; bottom: 2px; display: flex; align-items: center; max-width: calc(100% - 4px); pointer-events: none; }
 .tag-dot-button { display: grid; flex: none; place-items: center; width: 12px; height: 24px; padding: 0; border: 0; border-radius: 50%; background: transparent; cursor: pointer; pointer-events: auto; }
 .dot { display: block; width: 7px; height: 7px; border: 1px solid #26364a80; border-radius: 50%; background: var(--tag-color, #74849a); box-shadow: 0 0 0 1px #fff; }
-.tag-more { min-width: 26px; height: 22px; padding: 0 3px; border: 0; border-radius: 12px; background: #ffffffe0; color: #26364a; font-size: 10px; font-weight: 700; cursor: pointer; pointer-events: auto; }
 #detail { position: fixed; inset: 0; z-index: 6; display: grid; place-items: center; overflow: hidden; background: #121820; touch-action: none; overscroll-behavior: contain; }
 #full { max-width: 100%; max-height: 100dvh; object-fit: contain; user-select: none; cursor: grab; }
 #full:active { cursor: grabbing; }
@@ -52,7 +51,7 @@ body { margin: 0; min-height: 100vh; background: #fff; color: #182331; }
 #tag-error:not(:empty) { color: #822539; font-weight: 650; }
 #tag-error.loading { color: inherit; font-weight: 400; }
 @media (prefers-contrast: more), (prefers-reduced-transparency: reduce) {
-  #tag-toolbar, #tag-options .tag-filter, #clear-filters, #refresh, #drop-overlay, .tag-more, .tag-option, #back, .glass, .sheet { background: #fff; color: #182331; border-color: #182331; backdrop-filter: none; -webkit-backdrop-filter: none; }
+  #tag-toolbar, #tag-options .tag-filter, #clear-filters, #refresh, #drop-overlay, .tag-option, #back, .glass, .sheet { background: #fff; color: #182331; border-color: #182331; backdrop-filter: none; -webkit-backdrop-filter: none; }
   :focus-visible { box-shadow: 0 0 0 2px #182331; }
 }
 @media (pointer: coarse) { .tag-dot-button { width: 24px; } }
