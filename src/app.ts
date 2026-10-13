@@ -1,5 +1,6 @@
 type Tag = string;
 type Post = {name: string; url: string; width: number; height: number; tags: Tag[]};
+const TWITTER_IMAGE_ORIGIN = new URL('https://pbs.twimg.com');
 
 export function layoutRows(ratios: number[], width: number, targetHeight: number) {
   const positions: {x: number; y: number; width: number; height: number}[] = [];
@@ -121,6 +122,37 @@ export async function uploadFiles(files: readonly File[], onProgress: (file: Fil
     }
   }
   return failed;
+}
+
+export function droppedImageURL(data: Pick<DataTransfer, 'getData'>): string | null {
+  const html = data.getData('text/html');
+  const fragment = html ? new DOMParser().parseFromString(html, 'text/html') : null;
+  const image = fragment?.querySelector('img')?.getAttribute('src');
+  if (image) return image;
+  const uri = data.getData('text/uri-list').split(/\r?\n/).map(line => line.trim()).find(line => line && !line.startsWith('#'));
+  if (uri) return uri;
+  const download = data.getData('DownloadURL').match(/^[^:]+:[^:]*:(https:\/\/.+)$/i)?.[1];
+  if (download) return download;
+  const mozilla = data.getData('application/x-moz-file-promise-url').trim();
+  if (mozilla) return mozilla;
+  return fragment?.querySelector('a[href]')?.getAttribute('href') || data.getData('text/plain').trim() || null;
+}
+
+export async function fetchDroppedImage(value: string): Promise<File> {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error('Dropped URL is invalid');
+  }
+  if (url.origin !== TWITTER_IMAGE_ORIGIN.origin || url.username || url.password) {
+    throw new Error(`Only HTTPS images from ${TWITTER_IMAGE_ORIGIN.hostname} are supported`);
+  }
+  const response = await fetch(url, {mode: 'cors', credentials: 'omit', referrerPolicy: 'no-referrer', redirect: 'error'});
+  if (!response.ok) throw new Error(`Image download failed (${response.status})`);
+  const type = response.headers.get('content-type')?.split(';')[0].trim().toLowerCase() ?? '';
+  if (!type.startsWith('image/')) throw new Error('Dropped URL did not return an image');
+  return new File([await response.blob()], 'dropped-image', {type});
 }
 
 if (typeof document !== 'undefined') {
@@ -459,6 +491,16 @@ if (typeof document !== 'undefined') {
     pendingUploads.push(...files);
     void processUploads();
   }
+  async function queueDroppedImage(value: string) {
+    status.textContent = 'Fetching dropped image…';
+    try {
+      queueUploads([await fetchDroppedImage(value)]);
+    } catch (error) {
+      status.textContent = error instanceof TypeError
+        ? 'Could not fetch image. The source may block cross-origin access.'
+        : error instanceof Error ? error.message : 'Could not fetch dropped image';
+    }
+  }
 
   let scale = 1;
   let panX = 0;
@@ -621,32 +663,42 @@ if (typeof document !== 'undefined') {
     openDetail(link.pathname.slice('/posts/'.length));
   });
   const acceptsFiles = (event: DragEvent) => event.dataTransfer?.types.includes('Files') ?? false;
+  const acceptsURL = (event: DragEvent) => {
+    const types = event.dataTransfer?.types;
+    return !!types && ['text/uri-list', 'text/html', 'text/plain', 'DownloadURL', 'application/x-moz-file-promise-url'].some(type => types.includes(type));
+  };
+  const acceptsDrop = (event: DragEvent) => acceptsFiles(event) || acceptsURL(event);
   const galleryAcceptsDrops = () => location.pathname === '/' && detail.hidden && !tagsSheet.open;
   let dragDepth = 0;
   const clearDropOverlay = () => { dragDepth = 0; dropOverlay.hidden = true; };
   document.addEventListener('dragenter', event => {
-    if (!galleryAcceptsDrops() || !acceptsFiles(event)) return;
+    if (!galleryAcceptsDrops() || !acceptsDrop(event)) return;
     event.preventDefault();
     dragDepth++;
     dropOverlay.hidden = false;
   });
   document.addEventListener('dragover', event => {
-    if (!galleryAcceptsDrops() || !acceptsFiles(event)) return;
+    if (!galleryAcceptsDrops()) return;
     event.preventDefault();
     if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
   });
   document.addEventListener('dragleave', event => {
-    if (!galleryAcceptsDrops() || !acceptsFiles(event)) return;
+    if (!galleryAcceptsDrops() || !acceptsDrop(event)) return;
     dragDepth = Math.max(0, dragDepth - 1);
     if (!dragDepth) dropOverlay.hidden = true;
   });
   document.addEventListener('drop', event => {
     if (!galleryAcceptsDrops()) return;
-    const files = Array.from(event.dataTransfer?.files ?? []);
-    if (!acceptsFiles(event) && !files.length) return;
     event.preventDefault();
     clearDropOverlay();
-    if (files.length) queueUploads(files);
+    const files = Array.from(event.dataTransfer?.files ?? []);
+    if (files.length) {
+      queueUploads(files);
+    } else if (event.dataTransfer) {
+      const url = droppedImageURL(event.dataTransfer);
+      if (url) void queueDroppedImage(url);
+      else status.textContent = 'Drop an image file or a supported Twitter image URL.';
+    }
   });
   window.addEventListener('blur', clearDropOverlay);
   const match = location.pathname.match(/^\/posts\/([^/]+)$/);

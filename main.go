@@ -33,6 +33,16 @@ import (
 //go:embed static
 var assets embed.FS
 
+const twitterImageOrigin = "https://pbs.twimg.com"
+
+var galleryCSP = strings.Join([]string{
+	"default-src 'self'",
+	"connect-src 'self' " + twitterImageOrigin,
+	"base-uri 'none'",
+	"object-src 'none'",
+	"frame-ancestors 'none'",
+}, "; ")
+
 type server struct {
 	images     *os.Root
 	data       *os.Root
@@ -380,7 +390,7 @@ func (s *server) index(w http.ResponseWriter, r *http.Request) {
 		}
 		f.Close()
 	}
-	w.Header().Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'")
+	w.Header().Set("Content-Security-Policy", galleryCSP)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	http.ServeFileFS(w, r, assets, "static/index.html")
 }

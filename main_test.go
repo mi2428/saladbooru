@@ -83,6 +83,16 @@ func get(t *testing.T, h http.Handler, path string) *httptest.ResponseRecorder {
 
 func TestUploadAndDirectDrop(t *testing.T) {
 	_, images, h := setup(t)
+	wantCSP := strings.Join([]string{
+		"default-src 'self'",
+		"connect-src 'self' " + twitterImageOrigin,
+		"base-uri 'none'",
+		"object-src 'none'",
+		"frame-ancestors 'none'",
+	}, "; ")
+	if w := get(t, h, "/"); w.Header().Get("Content-Security-Policy") != wantCSP {
+		t.Fatalf("gallery CSP: %q, want %q", w.Header().Get("Content-Security-Policy"), wantCSP)
+	}
 	raw := pngImage(t)
 	w := post(t, h, "valid.png", raw, false)
 	if w.Code != 201 {

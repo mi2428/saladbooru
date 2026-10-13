@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {layoutRows, installZoom, imageRatio, showImage, uploadFiles} from '../src/app.ts';
+import {layoutRows, installZoom, imageRatio, showImage, uploadFiles, droppedImageURL, fetchDroppedImage} from '../src/app.ts';
 
 test('native image first, preview once after decode failure, then show error', () => {
   for (const name of ['x.avif', 'x.AVIF', 'x.png', 'x.jpg']) {
@@ -51,6 +51,33 @@ test('uploads dropped files one at a time and continues after failures', async (
     assert.equal(maxActive, 1);
     assert.deepEqual(progress, ['0:first.png', '1:bad.png', '2:last.png']);
     assert.deepEqual(failed.map(file => file.name), ['bad.png']);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('imports CORS-enabled Twitter image URLs as uploadable files', async () => {
+  const url = 'https://pbs.twimg.com/media/example?format=jpg&name=4096x4096';
+  const uri = droppedImageURL({getData: type => type === 'text/uri-list' ? `#image\n${url}\r\n` : ''});
+  assert.equal(uri, url);
+  assert.equal(droppedImageURL({getData: type => type === 'DownloadURL' ? `image/jpeg:dropped.jpg:${url}` : ''}), url);
+  assert.ok(uri);
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    assert.equal(String(input), url);
+    assert.equal(init?.mode, 'cors');
+    assert.equal(init?.credentials, 'omit');
+    assert.equal(init?.referrerPolicy, 'no-referrer');
+    assert.equal(init?.redirect, 'error');
+    return new Response(new Blob(['image'], {type: 'image/jpeg'}), {headers: {'Content-Type': 'image/jpeg'}});
+  };
+  try {
+    const file = await fetchDroppedImage(uri);
+    assert.equal(file.name, 'dropped-image');
+    assert.equal(file.type, 'image/jpeg');
+    assert.equal(await file.text(), 'image');
+    await assert.rejects(fetchDroppedImage('https://example.com/image.jpg'), /Only HTTPS images from/);
   } finally {
     globalThis.fetch = originalFetch;
   }
