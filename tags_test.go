@@ -361,6 +361,22 @@ func TestTagLockHelper(t *testing.T) {
 	}
 }
 
+func TestTagLockWithGroupWritableMode(t *testing.T) {
+	_, images, h := setup(t)
+	if err := os.WriteFile(filepath.Join(images, "one.png"), pngImage(t), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if w := putTags(t, h, "one.png", `{"tags":["before"]}`); w.Code != 200 {
+		t.Fatalf("initial tags: %d", w.Code)
+	}
+	if err := os.Chmod(filepath.Join(filepath.Dir(images), ".tags.lock"), 0660); err != nil {
+		t.Fatal(err)
+	}
+	if w := putTags(t, h, "one.png", `{"tags":["after"]}`); w.Code != 200 {
+		t.Fatalf("tag update after lock chmod: %d", w.Code)
+	}
+}
+
 func TestTagLockSerializesPUTAndDedupe(t *testing.T) {
 	s, images, h := setup(t)
 	data := filepath.Dir(images)

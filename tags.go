@@ -30,7 +30,7 @@ func lockTags(data *os.Root) (*os.File, error) {
 	f := os.NewFile(uintptr(fd), ".tags.lock")
 	valid := func() bool {
 		stat, err := f.Stat()
-		if err != nil || !stat.Mode().IsRegular() || stat.Mode().Perm()&0077 != 0 {
+		if err != nil || !stat.Mode().IsRegular() {
 			return false
 		}
 		path, err := data.Lstat(".tags.lock")
