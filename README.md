@@ -8,14 +8,36 @@ JPEG, PNG, GIF, WebP, and AVIF are supported; HEIC/HEIF are not.
 
 ## Getting Started
 
-`base/` is a portable Kustomize Deployment, Service, and PVC.
-Before `kubectl apply -k base`, replace `saladbooru:latest` with an image your cluster can pull and provide writable storage for UID 10001.
-Post a file with `POST /api/posts` as multipart `file`; placing it in `/data/images/` works without an API.
-A daily CronJob removes duplicate images.
+### Kubernetes (recommended)
 
-### Try it locally
+`base/` provides a Deployment with health probes, an internal ClusterIP Service, a 32-Gi ReadWriteOnce PVC for `/data`, and a daily duplicate-removal CronJob.
+No PV, Ingress, or external authentication is included.
+**Keep the service on a trusted network: image POST, tag PUT, and image DELETE are unauthenticated.**
 
-Run with Docker Compose:
+From the repository root, build the supported `linux/amd64` image (replace the example registry and tag):
+
+```console
+$ docker buildx build --platform linux/amd64 -t registry.example.com/saladbooru:v1 --push .
+```
+
+Replace `saladbooru:latest` in both `base/deployment.yaml` and `base/cronjob.yaml` with that image, or override both with a Kustomize overlay.
+Provide a PV or default StorageClass that binds the PVC and lets UID 10001 write to `/data`; adjust the security context if your volume requires a different UID. Then deploy:
+
+```console
+$ kubectl create namespace saladbooru --dry-run=client -o yaml | kubectl apply -f -
+$ kubectl -n saladbooru kustomize base
+$ kubectl -n saladbooru apply --dry-run=server -k base
+$ kubectl -n saladbooru apply -k base
+$ kubectl -n saladbooru rollout status deployment/saladbooru --timeout=180s
+$ kubectl -n saladbooru port-forward svc/saladbooru 18080:8080
+```
+
+Open http://127.0.0.1:18080/.
+Images can be uploaded there, posted as multipart `file` to `POST /api/posts`, or placed directly in `/data/images/`.
+
+### Docker
+
+Try Saladbooru locally with Docker Compose:
 
 ```sh
 docker compose -f docker-compose.dev.yml up --build -d
