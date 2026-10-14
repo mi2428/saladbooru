@@ -132,8 +132,8 @@ export function adjacentName(posts: Pick<Post, 'name' | 'tags'>[], name: string,
   return index < 0 ? undefined : visible[index + step]?.name;
 }
 
-export function detailTapStep(event: Pick<MouseEvent, 'target' | 'clientX'>, detail: HTMLElement, image: HTMLElement): -1 | 1 | null {
-  if (event.target !== detail && event.target !== image) return null;
+export function detailTapStep(event: Pick<MouseEvent, 'target' | 'clientX' | 'button'>, detail: HTMLElement, image: HTMLElement): -1 | 1 | null {
+  if (event.button !== 0 || (event.target !== detail && event.target !== image)) return null;
   const {left, width} = detail.getBoundingClientRect();
   return event.clientX < left + width / 2 ? -1 : 1;
 }
@@ -680,10 +680,20 @@ if (typeof document !== 'undefined') {
     event.preventDefault();
     void moveDetail(event.key === 'ArrowLeft' ? -1 : 1);
   });
+  let mouseDown: {x: number; y: number; target: EventTarget | null} | null = null;
+  let mouseDragged = false;
+  let clickTimer: ReturnType<typeof setTimeout> | undefined;
   detail.addEventListener('click', event => {
-    if (detail.hidden || tagsSheet.open || deleting || !window.matchMedia('(any-pointer: coarse)').matches) return;
+    if (detail.hidden || tagsSheet.open || deleting || mouseDragged) return;
     const step = detailTapStep(event, detail, full);
-    if (step !== null) void moveDetail(step);
+    if (step === null) return;
+    if (mouseDown?.target === full) {
+      clearTimeout(clickTimer);
+      if (event.detail === 1) {
+        const name = currentName;
+        clickTimer = setTimeout(() => { if (currentName === name) void moveDetail(step); }, 500);
+      }
+    } else void moveDetail(step);
   });
   detail.addEventListener('wheel', event => {
     event.preventDefault();
@@ -693,16 +703,20 @@ if (typeof document !== 'undefined') {
     zoom(scale * Math.exp(-event.deltaY * units / 500), event.clientX, event.clientY);
   }, {passive: false});
   detail.addEventListener('dblclick', event => {
-    if (event.target !== full) return;
+    if (event.target !== full && !(event.target === detail && mouseDown?.target === full)) return;
+    clearTimeout(clickTimer);
     zoom(scale === 1 ? 2 : 1, event.clientX, event.clientY);
   });
   detail.addEventListener('pointerdown', event => {
+    mouseDown = event.pointerType === 'mouse' && event.button === 0 ? {x: event.clientX, y: event.clientY, target: event.target} : null;
+    mouseDragged = false;
     if (event.pointerType === 'touch' || event.target !== full || scale === 1) return;
     drag = {x: event.clientX, y: event.clientY};
     detail.setPointerCapture(event.pointerId);
     event.preventDefault();
   });
   detail.addEventListener('pointermove', event => {
+    if (mouseDown && event.buttons === 1 && Math.hypot(event.clientX - mouseDown.x, event.clientY - mouseDown.y) > 4) mouseDragged = true;
     if (!drag) return;
     panX += event.clientX - drag.x;
     panY += event.clientY - drag.y;
@@ -710,7 +724,7 @@ if (typeof document !== 'undefined') {
     renderImage();
   });
   detail.addEventListener('pointerup', () => { drag = null; });
-  detail.addEventListener('pointercancel', () => { drag = null; });
+  detail.addEventListener('pointercancel', () => { drag = mouseDown = null; });
   const center = (touches: TouchList) => ({x: (touches[0].clientX + touches[1].clientX) / 2, y: (touches[0].clientY + touches[1].clientY) / 2});
   const distance = (touches: TouchList) => Math.hypot(touches[0].clientX - touches[1].clientX, touches[0].clientY - touches[1].clientY);
   detail.addEventListener('touchstart', event => {

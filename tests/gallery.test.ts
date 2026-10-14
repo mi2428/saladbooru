@@ -131,14 +131,15 @@ test('arrow navigation follows gallery order and active filters without wrapping
   assert.equal(adjacentName(posts, 'second.png', 1, ['red']), undefined);
 });
 
-test('viewer tap uses screen halves without intercepting viewer controls', () => {
+test('viewer taps and mouse clicks use screen halves without intercepting viewer controls', () => {
   const detail = {getBoundingClientRect: () => ({left: 10, width: 300})} as HTMLElement;
   const image = {} as HTMLImageElement;
-  const tap = (target: EventTarget, clientX: number) => detailTapStep({target, clientX}, detail, image);
-  assert.equal(tap(image, 159), -1);
-  assert.equal(tap(detail, 160), 1);
-  assert.equal(tap(image, 310), 1);
-  assert.equal(tap({} as EventTarget, 60), null);
+  const click = (target: EventTarget, clientX: number, button = 0) => detailTapStep({target, clientX, button}, detail, image);
+  assert.equal(click(image, 159), -1);
+  assert.equal(click(detail, 160), 1);
+  assert.equal(click(image, 310), 1);
+  assert.equal(click(image, 60, 2), null);
+  assert.equal(click({} as EventTarget, 60), null);
 });
 
 test('browser intrinsic dimensions correct display ratios', () => {
