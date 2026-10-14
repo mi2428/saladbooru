@@ -222,6 +222,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /health", s.health)
 	mux.HandleFunc("GET /api/posts", s.list)
 	mux.HandleFunc("POST /api/posts", s.loggedUpload)
+	mux.HandleFunc("DELETE /api/posts/{name}", s.deletePost)
 	mux.HandleFunc("GET /api/posts/{name}/tags", s.getTags)
 	mux.HandleFunc("PUT /api/posts/{name}/tags", s.putTags)
 	mux.HandleFunc("GET /images/{name}", s.media)

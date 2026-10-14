@@ -25,6 +25,13 @@ func putTags(t *testing.T, h http.Handler, name, body string) *httptest.Response
 	return w
 }
 
+func removePost(t *testing.T, h http.Handler, name string) *httptest.ResponseRecorder {
+	t.Helper()
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("DELETE", "/api/posts/"+name, nil))
+	return w
+}
+
 func TestTagsAPIAndPersistence(t *testing.T) {
 	_, images, h := setup(t)
 	data := filepath.Dir(images)
@@ -68,6 +75,99 @@ func TestTagsAPIAndPersistence(t *testing.T) {
 	}
 	if w := get(t, h, "/api/posts"); w.Code != 200 || strings.Contains(w.Body.String(), "作品 ひとつ") {
 		t.Fatalf("tag removal not reflected: %d", w.Code)
+	}
+}
+
+func TestDeletePostRemovesImageAndTags(t *testing.T) {
+	s, images, h := setup(t)
+	data := filepath.Dir(images)
+	for _, name := range []string{"one.png", "other.png"} {
+		if err := os.WriteFile(filepath.Join(images, name), pngImage(t), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if w := putTags(t, h, "one.png", `{"tags":["Tag1"]}`); w.Code != 200 {
+		t.Fatalf("tag: %d", w.Code)
+	}
+	get(t, h, "/api/posts") // Prime the listing cache.
+	if w := removePost(t, h, "missing.png"); w.Code != 404 {
+		t.Fatalf("missing image: %d", w.Code)
+	}
+	if err := os.Symlink("other.png", filepath.Join(images, "link.png")); err != nil {
+		t.Fatal(err)
+	}
+	if w := removePost(t, h, "link.png"); w.Code != 404 {
+		t.Fatalf("symlink: %d", w.Code)
+	}
+	if w := removePost(t, h, "..%2Fother.png"); w.Code == 204 {
+		t.Fatal("unsafe path accepted")
+	}
+	if w := removePost(t, h, "one.png"); w.Code != 204 {
+		t.Fatalf("delete tagged image: %d %s", w.Code, w.Body.String())
+	}
+	if w := get(t, h, "/images/one.png"); w.Code != 404 {
+		t.Fatalf("deleted image still served: %d", w.Code)
+	}
+	if w := get(t, h, "/api/posts/one.png/tags"); w.Code != 404 {
+		t.Fatalf("deleted tags still served: %d", w.Code)
+	}
+	if w := get(t, h, "/api/posts"); w.Code != 200 || strings.Contains(w.Body.String(), `"one.png"`) || !strings.Contains(w.Body.String(), `"other.png"`) {
+		t.Fatalf("stale listing: %d %s", w.Code, w.Body.String())
+	}
+	if w := removePost(t, h, "one.png"); w.Code != 404 {
+		t.Fatalf("repeat delete: %d", w.Code)
+	}
+	if w := removePost(t, h, "other.png"); w.Code != 204 {
+		t.Fatalf("delete untagged image: %d", w.Code)
+	}
+	restarted, err := newServer(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restarted.images.Close()
+	defer restarted.data.Close()
+	if w := get(t, restarted.routes(), "/api/posts"); w.Code != 200 || !strings.Contains(w.Body.String(), `"items":[]`) {
+		t.Fatalf("restart listing: %d %s", w.Code, w.Body.String())
+	}
+	if _, ok := s.tags["one.png"]; ok {
+		t.Fatal("deleted tag metadata remains")
+	}
+}
+
+func TestDeletePostRestoresImageWhenTagsCannotBeSaved(t *testing.T) {
+	_, images, h := setup(t)
+	name := filepath.Join(images, "one.png")
+	raw := pngImage(t)
+	if err := os.WriteFile(name, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if w := putTags(t, h, "one.png", `{"tags":["Tag1"]}`); w.Code != 200 {
+		t.Fatalf("tag: %d", w.Code)
+	}
+	stored := filepath.Join(filepath.Dir(images), "tags.json")
+	if err := os.Chmod(stored, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if w := removePost(t, h, "one.png"); w.Code != 503 {
+		t.Fatalf("failed tag save must reject deletion: %d", w.Code)
+	}
+	if image, err := os.ReadFile(name); err != nil || !bytes.Equal(image, raw) {
+		t.Fatalf("failed deletion lost the image: %v", err)
+	}
+	if entries, err := os.ReadDir(images); err != nil || len(entries) != 1 || entries[0].Name() != "one.png" {
+		t.Fatalf("failed deletion left hidden files: %v, %v", entries, err)
+	}
+	if err := os.Chmod(stored, 0600); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := newServer(filepath.Dir(images))
+	if err != nil {
+		t.Fatal("restart after failed deletion: ", err)
+	}
+	defer restarted.images.Close()
+	defer restarted.data.Close()
+	if w := get(t, restarted.routes(), "/api/posts/one.png/tags"); w.Code != 200 || !strings.Contains(w.Body.String(), "Tag1") {
+		t.Fatalf("failed deletion lost tags after restart: %d %s", w.Code, w.Body.String())
 	}
 }
 

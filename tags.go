@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"mime"
 	"net/http"
 	"os"
@@ -243,6 +244,66 @@ func (s *server) putTags(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(struct {
 		Tags []string `json:"tags"`
 	}{tags})
+}
+
+func (s *server) deletePost(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if !validName(name) {
+		http.NotFound(w, r)
+		return
+	}
+	s.tagsMu.Lock()
+	defer s.tagsMu.Unlock()
+	if s.tagsFailed {
+		http.Error(w, "Tag storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	lock, err := lockTags(s.data)
+	if err != nil {
+		s.tagsFailed = true
+		http.Error(w, "Tag storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	defer lock.Close()
+	f, _, _, _, err := s.openImage(name)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	f.Close()
+	id, err := randomName()
+	if err != nil {
+		http.Error(w, "Storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	hidden := ".delete-" + id
+	if err := s.images.Rename(name, hidden); err != nil {
+		http.Error(w, "Storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	previous := s.tags
+	_, tagged := previous[name]
+	if tagged {
+		next := maps.Clone(previous)
+		delete(next, name)
+		if err := s.saveTags(next); err != nil {
+			if s.images.Rename(hidden, name) != nil {
+				s.tagsFailed = true
+			}
+			http.Error(w, "Tag storage unavailable", http.StatusServiceUnavailable)
+			return
+		}
+	}
+	if err := s.images.Remove(hidden); err != nil {
+		if s.images.Rename(hidden, name) != nil {
+			s.tagsFailed = true
+		} else if tagged && s.saveTags(previous) != nil {
+			s.tagsFailed = true
+		}
+		http.Error(w, "Storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // saveTags is called with tagsMu held. A post-rename sync failure closes the store to writes and reads.
