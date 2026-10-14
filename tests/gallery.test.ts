@@ -101,8 +101,9 @@ test('only a click on the backdrop dismisses the tag dialog', () => {
 
 test('tags retain a vivid, case-insensitive color across views', () => {
   assert.equal(tagColor('Tomato'), tagColor('tomato'));
-  assert.match(tagColor('Tomato'), /^#[0-9a-f]{6}$/);
-  assert.ok(new Set(['tomato', 'carrot', 'lettuce', 'cucumber', 'onion', 'pepper', 'radish', 'apple'].map(tagColor)).size > 1);
+  const palette = new Set(Array.from({length: 512}, (_, i) => tagColor(`Tag${i}`)));
+  assert.equal(palette.size, 32);
+  for (const color of palette) assert.match(color, /^#[0-9a-f]{6}$/);
 });
 
 test('tag popularity counts images, merges case variants and sorts ties by name', () => {

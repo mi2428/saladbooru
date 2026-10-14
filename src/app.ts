@@ -2,7 +2,12 @@ type Tag = string;
 type Post = {name: string; url: string; width: number; height: number; tags: Tag[]};
 const TWITTER_IMAGE_ORIGIN = new URL('https://pbs.twimg.com');
 const key = (tag: Tag) => tag.toLowerCase();
-const TAG_COLORS = ['#f05a49', '#f58a39', '#92b934', '#31b96b', '#19b9ac', '#4b86f4', '#a568e5', '#e95c9e'];
+const TAG_COLORS = [
+  '#f05a49', '#f58a39', '#92b934', '#31b96b', '#19b9ac', '#4b86f4', '#a568e5', '#e95c9e',
+  '#ec665f', '#ed9941', '#b5bb38', '#64bf42', '#34bb82', '#30b8cb', '#4874dc', '#846fe4',
+  '#cf639e', '#df6b7a', '#de7f3c', '#c1a446', '#8dbb4d', '#43b3a4', '#538ecf', '#aa70d9',
+  '#e978ad', '#e0664c', '#daa542', '#a0bd57', '#62bd82', '#4aabc9', '#657ede', '#c968ca',
+];
 
 export function layoutRows(ratios: number[], width: number, targetHeight: number) {
   const positions: {x: number; y: number; width: number; height: number}[] = [];
