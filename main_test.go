@@ -140,6 +140,16 @@ func TestUploadAndDirectDrop(t *testing.T) {
 	if w := get(t, h, "/icon.png"); w.Code != 200 || w.Header().Get("Content-Type") != "image/png" || w.Header().Get("X-Content-Type-Options") != "nosniff" {
 		t.Fatalf("home screen icon: %d", w.Code)
 	}
+	if w := get(t, h, "/"); w.Code != 200 || !strings.Contains(w.Body.String(), `rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png"`) {
+		t.Fatalf("Apple touch icon link: %d", w.Code)
+	}
+	w = get(t, h, "/apple-touch-icon.png")
+	if w.Code != 200 || w.Header().Get("Content-Type") != "image/png" || w.Header().Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatalf("Apple touch icon: %d", w.Code)
+	}
+	if config, err := png.DecodeConfig(bytes.NewReader(w.Body.Bytes())); err != nil || config.Width != 180 || config.Height != 180 {
+		t.Fatalf("invalid Apple touch icon size: %+v, %v", config, err)
+	}
 }
 
 func TestListRefreshesChangedFiles(t *testing.T) {

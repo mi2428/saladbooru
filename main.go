@@ -228,7 +228,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /preview/{name}", s.preview)
 	mux.HandleFunc("GET /posts/{name}", s.index)
 	mux.HandleFunc("GET /", s.index)
-	for _, name := range []string{"app.js", "style.css", "manifest.json", "icon.svg", "icon.png"} {
+	for _, name := range []string{"app.js", "style.css", "manifest.json", "icon.svg", "icon.png", "apple-touch-icon.png"} {
 		mux.HandleFunc("GET /"+name, func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("X-Content-Type-Options", "nosniff")
 			http.ServeFileFS(w, r, assets, "static/"+name)
