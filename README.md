@@ -43,8 +43,6 @@ Try Saladbooru locally with Docker Compose:
 docker compose -f docker-compose.dev.yml up --build -d
 ```
 
-Open http://127.0.0.1:18080/; the review gallery data is stored in `data/tag-review/` by default.
-`src/app.ts` compiles to ignored `static/app.js` for Go's embedded UI.
 Run `npm ci && npm run check && npm run build`, then `go test ./...`; the Dockerfile runs the UI checks and build automatically.
 
 ## License
