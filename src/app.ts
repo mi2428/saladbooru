@@ -132,6 +132,12 @@ export function adjacentName(posts: Pick<Post, 'name' | 'tags'>[], name: string,
   return index < 0 ? undefined : visible[index + step]?.name;
 }
 
+export function detailTapStep(event: Pick<MouseEvent, 'target' | 'clientX'>, detail: HTMLElement, image: HTMLElement): -1 | 1 | null {
+  if (event.target !== detail && event.target !== image) return null;
+  const {left, width} = detail.getBoundingClientRect();
+  return event.clientX < left + width / 2 ? -1 : 1;
+}
+
 export function shouldSubmitTagOnEnter(event: Pick<KeyboardEvent, 'key' | 'isComposing' | 'keyCode'>): boolean {
   return event.key === 'Enter' && !event.isComposing && event.keyCode !== 229;
 }
@@ -673,6 +679,11 @@ if (typeof document !== 'undefined') {
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
     event.preventDefault();
     void moveDetail(event.key === 'ArrowLeft' ? -1 : 1);
+  });
+  detail.addEventListener('click', event => {
+    if (detail.hidden || tagsSheet.open || deleting || !window.matchMedia('(any-pointer: coarse)').matches) return;
+    const step = detailTapStep(event, detail, full);
+    if (step !== null) void moveDetail(step);
   });
   detail.addEventListener('wheel', event => {
     event.preventDefault();

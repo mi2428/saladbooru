@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {layoutRows, installZoom, imageRatio, showImage, uploadFiles, droppedImageURL, fetchDroppedImage, shouldSubmitTagOnEnter, clickedOutsideDialog, tagColor, tagsByUse, adjacentName} from '../src/app.ts';
+import {layoutRows, installZoom, imageRatio, showImage, uploadFiles, droppedImageURL, fetchDroppedImage, shouldSubmitTagOnEnter, clickedOutsideDialog, tagColor, tagsByUse, adjacentName, detailTapStep} from '../src/app.ts';
 
 test('native image first, preview once after decode failure, then show error', () => {
   for (const name of ['x.avif', 'x.AVIF', 'x.png', 'x.jpg']) {
@@ -129,6 +129,16 @@ test('arrow navigation follows gallery order and active filters without wrapping
   assert.equal(adjacentName(posts, 'first.png', -1, []), undefined);
   assert.equal(adjacentName(posts, 'third.png', 1, ['red']), undefined);
   assert.equal(adjacentName(posts, 'second.png', 1, ['red']), undefined);
+});
+
+test('viewer tap uses screen halves without intercepting viewer controls', () => {
+  const detail = {getBoundingClientRect: () => ({left: 10, width: 300})} as HTMLElement;
+  const image = {} as HTMLImageElement;
+  const tap = (target: EventTarget, clientX: number) => detailTapStep({target, clientX}, detail, image);
+  assert.equal(tap(image, 159), -1);
+  assert.equal(tap(detail, 160), 1);
+  assert.equal(tap(image, 310), 1);
+  assert.equal(tap({} as EventTarget, 60), null);
 });
 
 test('browser intrinsic dimensions correct display ratios', () => {
