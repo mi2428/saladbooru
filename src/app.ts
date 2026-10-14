@@ -1,6 +1,8 @@
 type Tag = string;
 type Post = {name: string; url: string; width: number; height: number; tags: Tag[]};
 const TWITTER_IMAGE_ORIGIN = new URL('https://pbs.twimg.com');
+const key = (tag: Tag) => tag.toLowerCase();
+const TAG_COLORS = ['#f05a49', '#f58a39', '#92b934', '#31b96b', '#19b9ac', '#4b86f4', '#a568e5', '#e95c9e'];
 
 export function layoutRows(ratios: number[], width: number, targetHeight: number) {
   const positions: {x: number; y: number; width: number; height: number}[] = [];
@@ -95,6 +97,38 @@ export function installZoom(relayout: () => void): () => number {
 
 export function imageRatio(post: Pick<Post, 'width' | 'height'>, img: Pick<HTMLImageElement, 'naturalWidth' | 'naturalHeight'>): number {
   return img.naturalWidth && img.naturalHeight ? img.naturalWidth / img.naturalHeight : post.width / post.height;
+}
+
+export function tagColor(tag: Tag): string {
+  let hash = 2166136261;
+  for (const char of key(tag)) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
+  return TAG_COLORS[(hash >>> 0) % TAG_COLORS.length];
+}
+
+export function tagsByUse(posts: Pick<Post, 'tags'>[]): Tag[] {
+  const counts = new Map<string, {tag: Tag; count: number}>();
+  for (const post of posts) {
+    const seen = new Set<string>();
+    for (const tag of post.tags) {
+      const id = key(tag);
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const entry = counts.get(id);
+      if (entry) entry.count++;
+      else counts.set(id, {tag, count: 1});
+    }
+  }
+  return [...counts.values()].sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag)).map(entry => entry.tag);
+}
+
+export function shouldSubmitTagOnEnter(event: Pick<KeyboardEvent, 'key' | 'isComposing' | 'keyCode'>): boolean {
+  return event.key === 'Enter' && !event.isComposing && event.keyCode !== 229;
+}
+
+export function clickedOutsideDialog(event: Pick<MouseEvent, 'target' | 'clientX' | 'clientY'>, dialog: HTMLDialogElement): boolean {
+  if (event.target !== dialog) return false;
+  const {left, right, top, bottom} = dialog.getBoundingClientRect();
+  return event.clientX < left || event.clientX >= right || event.clientY < top || event.clientY >= bottom;
 }
 
 export function showImage(img: HTMLImageElement, url: string, onError: () => void): void {
@@ -193,14 +227,12 @@ if (typeof document !== 'undefined') {
   let draft: Tag[] = [];
   let saving = false;
   let posts: Post[] = [];
-  let suggestionPool: Tag[] = [];
+  let suggestionPool: Post[] = [];
   const selected = new Map<string, Tag>();
   const entries: {post: Post; tile: HTMLDivElement; link: HTMLAnchorElement; ratio: number; dots: HTMLDivElement; dotLimit: number; renderedTags?: Tag[]; renderedFilter?: string}[] = [];
   const pendingUploads: File[] = [];
   let uploading = false;
   let preferredHeight = () => 220;
-  const key = (tag: Tag) => tag.toLowerCase();
-  const uniqueTags = (tags: Tag[]) => Array.from(new Map(tags.map(tag => [key(tag), tag])).values()).sort((a, b) => a.localeCompare(b));
   function createEntry(post: Post): typeof entries[number] {
     const tile = document.createElement('div');
     const link = document.createElement('a');
@@ -222,24 +254,14 @@ if (typeof document !== 'undefined') {
     showImage(img, post.url, () => { status.textContent = 'Some images cannot be displayed'; });
     return entry;
   }
-  const tagColor = (tag: Tag) => {
-    let hash = 2166136261;
-    for (const char of key(tag)) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
-    return `hsl(${(hash >>> 0) % 360} 66% 42%)`;
-  };
-
   function option(tag: Tag, active: boolean, action: () => void): HTMLButtonElement {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = `tag-option ${active ? 'chosen' : ''}`;
     button.setAttribute('aria-pressed', String(active));
     button.title = tag;
-    const dot = document.createElement('span');
-    dot.className = 'dot';
-    dot.style.setProperty('--tag-color', tagColor(tag));
-    const label = document.createElement('span');
-    label.textContent = tag;
-    button.append(dot, label);
+    button.style.setProperty('--tag-color', tagColor(tag));
+    button.textContent = tag;
     button.addEventListener('click', action);
     return button;
   }
@@ -295,8 +317,8 @@ if (typeof document !== 'undefined') {
 
   function renderTagBar(focus?: string) {
     tagOptions.replaceChildren();
-    const all = uniqueTags(posts.flatMap(post => post.tags));
-    const tags = [...selected.values(), ...all.filter(tag => !selected.has(key(tag)))];
+    const tags = tagsByUse(posts);
+    for (const tag of selected.values()) if (!tags.some(other => key(other) === key(tag))) tags.push(tag);
     let focused: HTMLButtonElement | undefined;
     for (const tag of tags) {
       const id = key(tag);
@@ -308,6 +330,7 @@ if (typeof document !== 'undefined') {
     clearFilters.hidden = selected.size === 0;
     tagOptions.scrollLeft = 0;
     focused?.focus({preventScroll: true});
+    focused?.scrollIntoView({block: 'nearest', inline: 'nearest'});
   }
   function syncGallery(items: Post[]) {
     const existing = new Map(entries.map(entry => [entry.post.name, entry] as const));
@@ -351,8 +374,9 @@ if (typeof document !== 'undefined') {
   }
   function renderSuggestions() {
     suggestions.replaceChildren();
+    if (draft.length >= 5) { suggestions.hidden = true; return; }
     const query = nameInput.value.trim().toLowerCase();
-    const matches = query ? uniqueTags(suggestionPool).filter(tag => !draft.some(current => key(tag) === key(current)) && tag.toLowerCase().includes(query)).slice(0, 8) : [];
+    const matches = tagsByUse(suggestionPool).filter(tag => !draft.some(current => key(tag) === key(current)) && (!query || key(tag).includes(query))).slice(0, query ? 8 : 6);
     suggestions.hidden = matches.length === 0;
     for (const tag of matches) {
       suggestions.append(option(tag, false, () => addTag(tag)));
@@ -363,6 +387,7 @@ if (typeof document !== 'undefined') {
     for (const tag of draft) {
       const chip = document.createElement('span');
       chip.className = 'tag-chip';
+      chip.style.setProperty('--tag-color', tagColor(tag));
       const label = document.createElement('span');
       label.textContent = tag;
       const remove = document.createElement('button');
@@ -385,12 +410,15 @@ if (typeof document !== 'undefined') {
     renderSuggestions();
     nameInput.focus();
   }
-  element<HTMLButtonElement>('tag-add').addEventListener('click', () => addTag(nameInput.value));
   nameInput.addEventListener('input', renderSuggestions);
   nameInput.addEventListener('keydown', event => {
-    if (event.key === 'Enter') { event.preventDefault(); addTag(nameInput.value); }
+    if (!shouldSubmitTagOnEnter(event)) return;
+    event.preventDefault();
+    addTag(nameInput.value);
   });
-  element<HTMLButtonElement>('tag-cancel').addEventListener('click', () => tagsSheet.close());
+  tagsSheet.addEventListener('click', event => {
+    if (!saving && clickedOutsideDialog(event, tagsSheet)) tagsSheet.close();
+  });
   tagsSheet.addEventListener('cancel', event => { if (saving) event.preventDefault(); });
   tagsSheet.addEventListener('close', () => sheetFocus?.focus({preventScroll: true}));
   tagsOpen.addEventListener('click', () => {
@@ -400,7 +428,7 @@ if (typeof document !== 'undefined') {
     tagError.classList.toggle('loading', !galleryLoaded);
     tagError.textContent = galleryLoaded ? '' : 'Loading existing tags…';
     nameInput.value = '';
-    suggestionPool = posts.flatMap(post => post.tags);
+    suggestionPool = posts;
     renderChips();
     renderSuggestions();
     tagsSheet.showModal();
@@ -408,7 +436,7 @@ if (typeof document !== 'undefined') {
     tagsTitle.focus({preventScroll: true});
     if (!galleryLoaded) fetchPosts().then(items => {
       if (tagsSheet.open) {
-        suggestionPool = items.flatMap(post => post.tags);
+        suggestionPool = items;
         renderSuggestions();
         tagError.classList.remove('loading');
         tagError.textContent = '';
@@ -423,6 +451,10 @@ if (typeof document !== 'undefined') {
   });
   saveButton.addEventListener('click', async () => {
     if (saving) return;
+    if (nameInput.value) {
+      addTag(nameInput.value);
+      if (tagError.textContent) return;
+    }
     saving = true;
     tagError.textContent = '';
     tagsSheet.querySelectorAll<HTMLInputElement | HTMLButtonElement>('input, button').forEach(control => { control.disabled = true; });

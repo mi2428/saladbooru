@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {layoutRows, installZoom, imageRatio, showImage, uploadFiles, droppedImageURL, fetchDroppedImage} from '../src/app.ts';
+import {layoutRows, installZoom, imageRatio, showImage, uploadFiles, droppedImageURL, fetchDroppedImage, shouldSubmitTagOnEnter, clickedOutsideDialog, tagColor, tagsByUse} from '../src/app.ts';
 
 test('native image first, preview once after decode failure, then show error', () => {
   for (const name of ['x.avif', 'x.AVIF', 'x.png', 'x.jpg']) {
@@ -81,6 +81,39 @@ test('imports CORS-enabled Twitter image URLs as uploadable files', async () => 
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test('IME confirmation Enter does not submit a tag', () => {
+  assert.equal(shouldSubmitTagOnEnter({key: 'Enter', isComposing: true, keyCode: 13}), false);
+  assert.equal(shouldSubmitTagOnEnter({key: 'Enter', isComposing: false, keyCode: 229}), false);
+  assert.equal(shouldSubmitTagOnEnter({key: 'Enter', isComposing: false, keyCode: 13}), true);
+  assert.equal(shouldSubmitTagOnEnter({key: 'a', isComposing: false, keyCode: 65}), false);
+});
+
+test('only a click on the backdrop dismisses the tag dialog', () => {
+  const dialog = {getBoundingClientRect: () => ({left: 50, right: 250, top: 100, bottom: 300})} as HTMLDialogElement;
+  const click = (target: EventTarget, clientX: number, clientY: number) => clickedOutsideDialog({target, clientX, clientY}, dialog);
+  assert.equal(click(dialog, 60, 110), false);
+  assert.equal(click(dialog, 60, 301), true);
+  assert.equal(click(dialog, 49, 110), true);
+  assert.equal(click({} as EventTarget, 49, 110), false);
+});
+
+test('tags retain a vivid, case-insensitive color across views', () => {
+  assert.equal(tagColor('Tomato'), tagColor('tomato'));
+  assert.match(tagColor('Tomato'), /^#[0-9a-f]{6}$/);
+  assert.ok(new Set(['tomato', 'carrot', 'lettuce', 'cucumber', 'onion', 'pepper', 'radish', 'apple'].map(tagColor)).size > 1);
+});
+
+test('tag popularity counts images, merges case variants and sorts ties by name', () => {
+  const posts = [
+    {tags: ['Zulu', 'blue', 'BLUE']},
+    {tags: ['Blue', 'Aiko']},
+    {tags: ['aiko', 'blue']},
+    {tags: ['Zulu']},
+  ];
+  assert.deepEqual(tagsByUse(posts), ['blue', 'Aiko', 'Zulu']);
+  assert.deepEqual(tagsByUse([]), []);
 });
 
 test('browser intrinsic dimensions correct display ratios', () => {

@@ -29,7 +29,7 @@
       <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12H4m7-7-7 7 7 7"/></svg>
     </a>
     <img id="full" alt="Full-size image" draggable="false">
-    <button id="tags-open" class="glass" type="button" aria-label="Edit image tags" title="Edit image tags" aria-haspopup="dialog" disabled>
+    <button id="tags-open" type="button" aria-label="Edit image tags" title="Edit image tags" aria-haspopup="dialog" disabled>
       <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3.4 13.4a2 2 0 0 1 0-2.8l7.2-7.2A2 2 0 0 1 12 2.8h7.2a2 2 0 0 1 2 2V12a2 2 0 0 1-.6 1.4Z"/><circle cx="16.5" cy="7.5" r="1"/></svg>
     </button>
     <p id="detail-status" role="status"></p>
@@ -38,14 +38,10 @@
     <h2 id="tags-title" tabindex="-1">Tags</h2>
     <div id="tag-chips" class="tag-chips" aria-label="Current tags"></div>
     <label for="tag-name">Add tag</label>
-    <div class="tag-entry">
-      <input id="tag-name" type="text" autocomplete="off">
-      <button id="tag-add" type="button">Add</button>
-    </div>
+    <input id="tag-name" type="text" autocomplete="off" placeholder="Press Enter to add">
     <div id="tag-suggestions" class="tag-options" aria-label="Existing tags" hidden></div>
     <p id="tag-error" role="alert"></p>
     <div class="sheet-actions">
-      <button id="tag-cancel" type="button">Cancel</button>
       <button id="tag-save" type="button">Save</button>
     </div>
   </dialog>
