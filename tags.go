@@ -151,7 +151,7 @@ func (s *server) getTags(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := r.PathValue("name")
-	f, _, _, _, err := s.openImage(name)
+	f, _, _, err := s.openImage(name)
 	if err != nil {
 		http.NotFound(w, r)
 		return
@@ -220,7 +220,7 @@ func (s *server) putTags(w http.ResponseWriter, r *http.Request) {
 	}
 	defer lock.Close()
 	name := r.PathValue("name")
-	f, _, _, _, err := s.openImage(name)
+	f, _, _, err := s.openImage(name)
 	if err != nil {
 		http.NotFound(w, r)
 		return
@@ -265,7 +265,7 @@ func (s *server) deletePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer lock.Close()
-	f, _, _, _, err := s.openImage(name)
+	f, _, _, err := s.openImage(name)
 	if err != nil {
 		http.NotFound(w, r)
 		return

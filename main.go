@@ -105,20 +105,28 @@ func validName(name string) bool {
 	return name != "" && !strings.HasPrefix(name, ".") && !strings.ContainsAny(name, `/\`) && filepath.Base(name) == name
 }
 
+func imageHeader(f *os.File) (string, int, int, error) {
+	config, format, err := image.DecodeConfig(f)
+	if err != nil || config.Width < 1 || config.Height < 1 {
+		return "", 0, 0, errors.New("unsupported image")
+	}
+	switch format {
+	case "jpeg", "png", "gif", "webp", "avif":
+	default:
+		return "", 0, 0, errors.New("unsupported image")
+	}
+	return format, config.Width, config.Height, nil
+}
+
 // inspect decodes the first frame; later animation frames remain unvalidated.
 func inspect(f *os.File) (string, int, int, image.Image, error) {
 	stat, err := f.Stat()
 	if err != nil || !stat.Mode().IsRegular() || stat.Size() < 1 {
 		return "", 0, 0, nil, errors.New("image must be a non-empty regular file")
 	}
-	config, format, err := image.DecodeConfig(f)
-	if err != nil || config.Width < 1 || config.Height < 1 {
-		return "", 0, 0, nil, errors.New("unsupported image")
-	}
-	switch format {
-	case "jpeg", "png", "gif", "webp", "avif":
-	default:
-		return "", 0, 0, nil, errors.New("unsupported image")
+	format, _, _, err := imageHeader(f)
+	if err != nil {
+		return "", 0, 0, nil, err
 	}
 	if _, err = f.Seek(0, io.SeekStart); err != nil {
 		return "", 0, 0, nil, err
@@ -146,29 +154,29 @@ func inspect(f *os.File) (string, int, int, image.Image, error) {
 	return format, width, height, decoded, nil
 }
 
-func (s *server) openImage(name string) (*os.File, item, string, image.Image, error) {
+func (s *server) openImage(name string) (*os.File, item, string, error) {
 	if !validName(name) {
-		return nil, item{}, "", nil, os.ErrNotExist
+		return nil, item{}, "", os.ErrNotExist
 	}
 	before, err := s.images.Lstat(name)
 	if err != nil || !before.Mode().IsRegular() {
-		return nil, item{}, "", nil, os.ErrNotExist
+		return nil, item{}, "", os.ErrNotExist
 	}
 	f, err := s.images.Open(name)
 	if err != nil {
-		return nil, item{}, "", nil, err
+		return nil, item{}, "", err
 	}
 	stat, err := f.Stat()
 	if err != nil || !os.SameFile(before, stat) {
 		f.Close()
-		return nil, item{}, "", nil, os.ErrNotExist
+		return nil, item{}, "", os.ErrNotExist
 	}
-	format, width, height, decoded, err := inspect(f)
+	format, width, height, err := imageHeader(f)
 	if err != nil {
 		f.Close()
-		return nil, item{}, "", nil, err
+		return nil, item{}, "", err
 	}
-	return f, item{Name: name, URL: "/images/" + urlEscape(name), Width: width, Height: height, Modified: stat.ModTime()}, "image/" + format, decoded, nil
+	return f, item{Name: name, URL: "/images/" + urlEscape(name), Width: width, Height: height, Modified: stat.ModTime()}, "image/" + format, nil
 }
 
 func urlEscape(name string) string {
@@ -303,7 +311,7 @@ func (s *server) list(w http.ResponseWriter, _ *http.Request) {
 			items = append(items, previous.item)
 			continue
 		}
-		f, image, _, _, err := s.openImage(name)
+		f, image, _, err := s.openImage(name)
 		if err == nil {
 			stat, err = f.Stat()
 			f.Close()
@@ -332,7 +340,7 @@ func (s *server) list(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *server) media(w http.ResponseWriter, r *http.Request) {
-	f, _, contentType, _, err := s.openImage(r.PathValue("name"))
+	f, _, contentType, err := s.openImage(r.PathValue("name"))
 	if err != nil {
 		http.NotFound(w, r)
 		return
@@ -356,13 +364,22 @@ func (s *server) media(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) preview(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	f, _, contentType, decoded, err := s.openImage(name)
+	f, _, contentType, err := s.openImage(name)
 	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
 	defer f.Close()
 	if contentType != "image/avif" {
+		http.NotFound(w, r)
+		return
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		http.Error(w, "Preview unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	decoded, err := avif.Decode(f, avif.Options{AutoRotate: true})
+	if err != nil || decoded == nil {
 		http.NotFound(w, r)
 		return
 	}
@@ -384,7 +401,7 @@ func (s *server) index(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-		f, _, _, _, err := s.openImage(r.PathValue("name"))
+		f, _, _, err := s.openImage(r.PathValue("name"))
 		if err != nil {
 			http.NotFound(w, r)
 			return
@@ -509,8 +526,15 @@ func dedupe(images *os.Root, tags map[string][]string) (int, error) {
 		if !validName(name) || !entry.Type().IsRegular() {
 			continue
 		}
-		f, _, _, _, err := s.openImage(name)
-		if err != nil { // Match the gallery: ignore invalid or disappearing files.
+		f, _, _, err := s.openImage(name)
+		if err != nil { // Ignore unreadable or disappearing files.
+			continue
+		}
+		if _, err := f.Seek(0, io.SeekStart); err == nil {
+			_, _, _, _, err = inspect(f)
+		}
+		if err != nil {
+			f.Close()
 			continue
 		}
 		stat, err := f.Stat()
