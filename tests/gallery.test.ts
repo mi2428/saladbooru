@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {layoutRows, installZoom, imageRatio, showImage, uploadFiles, droppedImageURL, fetchDroppedImage, shouldSubmitTagOnEnter, clickedOutsideDialog, tagColor, tagsByUse} from '../src/app.ts';
+import {layoutRows, installZoom, imageRatio, showImage, uploadFiles, droppedImageURL, fetchDroppedImage, shouldSubmitTagOnEnter, clickedOutsideDialog, tagColor, tagsByUse, adjacentName} from '../src/app.ts';
 
 test('native image first, preview once after decode failure, then show error', () => {
   for (const name of ['x.avif', 'x.AVIF', 'x.png', 'x.jpg']) {
@@ -115,6 +115,20 @@ test('tag popularity counts images, merges case variants and sorts ties by name'
   ];
   assert.deepEqual(tagsByUse(posts), ['blue', 'Aiko', 'Zulu']);
   assert.deepEqual(tagsByUse([]), []);
+});
+
+test('arrow navigation follows gallery order and active filters without wrapping', () => {
+  const posts = [
+    {name: 'first.png', tags: ['Red']},
+    {name: 'second.png', tags: ['Blue']},
+    {name: 'third.png', tags: ['red']},
+  ];
+  assert.equal(adjacentName(posts, 'first.png', 1, []), 'second.png');
+  assert.equal(adjacentName(posts, 'second.png', -1, []), 'first.png');
+  assert.equal(adjacentName(posts, 'first.png', 1, ['red']), 'third.png');
+  assert.equal(adjacentName(posts, 'first.png', -1, []), undefined);
+  assert.equal(adjacentName(posts, 'third.png', 1, ['red']), undefined);
+  assert.equal(adjacentName(posts, 'second.png', 1, ['red']), undefined);
 });
 
 test('browser intrinsic dimensions correct display ratios', () => {

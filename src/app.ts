@@ -126,6 +126,12 @@ export function tagsByUse(posts: Pick<Post, 'tags'>[]): Tag[] {
   return [...counts.values()].sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag)).map(entry => entry.tag);
 }
 
+export function adjacentName(posts: Pick<Post, 'name' | 'tags'>[], name: string, step: -1 | 1, filters: string[]): string | undefined {
+  const visible = posts.filter(post => filters.every(id => post.tags.some(tag => key(tag) === id)));
+  const index = visible.findIndex(post => post.name === name);
+  return index < 0 ? undefined : visible[index + step]?.name;
+}
+
 export function shouldSubmitTagOnEnter(event: Pick<KeyboardEvent, 'key' | 'isComposing' | 'keyCode'>): boolean {
   return event.key === 'Enter' && !event.isComposing && event.keyCode !== 229;
 }
@@ -590,6 +596,19 @@ if (typeof document !== 'undefined') {
     }).catch(error => { detailStatus.textContent = error instanceof Error ? error.message : 'Failed to load tags'; });
     back.focus({preventScroll: true});
   }
+  async function moveDetail(step: -1 | 1) {
+    try {
+      if (!posts.length) posts = await fetchPosts();
+      if (detail.hidden || tagsSheet.open) return;
+      const name = adjacentName(posts, currentName, step, [...selected.keys()]);
+      if (!name) return;
+      const path = `/posts/${encodeURIComponent(name)}`;
+      history.replaceState(null, '', path);
+      openDetail(path.slice('/posts/'.length));
+    } catch (error) {
+      if (!detail.hidden) detailStatus.textContent = error instanceof Error ? error.message : 'Failed to load images';
+    }
+  }
   function closeDetail() {
     if (detail.hidden) return;
     detail.hidden = true;
@@ -614,6 +633,10 @@ if (typeof document !== 'undefined') {
   });
   document.addEventListener('keydown', event => {
     if (event.key === 'Escape' && !detail.hidden && !tagsSheet.open) back.click();
+    if (detail.hidden || tagsSheet.open || event.isComposing || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    event.preventDefault();
+    void moveDetail(event.key === 'ArrowLeft' ? -1 : 1);
   });
   detail.addEventListener('wheel', event => {
     event.preventDefault();
