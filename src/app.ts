@@ -428,7 +428,6 @@ if (typeof document !== 'undefined') {
     nameInput.value = '';
     renderChips();
     renderSuggestions();
-    nameInput.focus();
   }
   nameInput.addEventListener('input', renderSuggestions);
   nameInput.addEventListener('keydown', event => {
