@@ -220,6 +220,7 @@ if (typeof document !== 'undefined') {
   const tagOptions = element<HTMLDivElement>('tag-options');
   const clearFilters = element<HTMLButtonElement>('clear-filters');
   const tagsOpen = element<HTMLButtonElement>('tags-open');
+  const deleteButton = element<HTMLButtonElement>('delete-post');
   const tagsSheet = element<HTMLDialogElement>('tags-sheet');
   const chips = element<HTMLDivElement>('tag-chips');
   const suggestions = element<HTMLDivElement>('tag-suggestions');
@@ -235,6 +236,8 @@ if (typeof document !== 'undefined') {
   let sheetFocus: HTMLElement | null = null;
   let currentName = '';
   let currentTags: Tag[] = [];
+  let tagsReady = false;
+  let deleting = false;
   let draft: Tag[] = [];
   let saving = false;
   let posts: Post[] = [];
@@ -488,6 +491,31 @@ if (typeof document !== 'undefined') {
       tagsSheet.querySelectorAll<HTMLInputElement | HTMLButtonElement>('input, button').forEach(control => { control.disabled = false; });
     }
   });
+  deleteButton.addEventListener('click', async () => {
+    if (deleting || detail.hidden || tagsSheet.open || !window.confirm('Delete this image permanently?')) return;
+    const name = currentName;
+    deleting = true;
+    deleteButton.disabled = true;
+    tagsOpen.disabled = true;
+    detailStatus.textContent = 'Deleting image…';
+    try {
+      const response = await fetch(`/api/posts/${encodeURIComponent(name)}`, {method: 'DELETE'});
+      if (!response.ok) throw new Error(`Could not delete image (${response.status})`);
+      if (galleryLoaded) {
+        syncGallery(posts.filter(post => post.name !== name));
+        previousFocus = grid.querySelector<HTMLAnchorElement>('.gallery-tile:not([hidden]) .gallery-link') ?? refreshElement;
+      }
+      if (!detail.hidden && currentName === name) back.click();
+    } catch (error) {
+      if (!detail.hidden && currentName === name) detailStatus.textContent = error instanceof Error ? error.message : 'Could not delete image';
+    } finally {
+      deleting = false;
+      if (!detail.hidden) {
+        deleteButton.disabled = false;
+        tagsOpen.disabled = !tagsReady;
+      }
+    }
+  });
 
   async function fetchPosts(): Promise<Post[]> {
     const response = await fetch('/api/posts');
@@ -572,7 +600,8 @@ if (typeof document !== 'undefined') {
   function openDetail(name: string) {
     if (detail.hidden) savedScroll = window.scrollY;
     openedFromGallery = galleryLoaded;
-    currentName = decodeURIComponent(name);
+    const openedName = decodeURIComponent(name);
+    currentName = openedName;
     grid.inert = true;
     tagToolbar.inert = true;
     detail.hidden = false;
@@ -582,24 +611,31 @@ if (typeof document !== 'undefined') {
     renderImage();
     detailStatus.textContent = '';
     full.alt = currentName;
-    showImage(full, `/images/${name}`, () => { detailStatus.textContent = 'This image cannot be displayed'; });
+    showImage(full, `/images/${name}`, () => {
+      if (currentName === openedName && !detail.hidden) detailStatus.textContent = 'This image cannot be displayed';
+    });
+    tagsReady = false;
     tagsOpen.disabled = true;
+    deleteButton.disabled = deleting;
     fetch(`/api/posts/${encodeURIComponent(currentName)}/tags`).then(response => {
       if (!response.ok) throw new Error(`Failed to load tags (${response.status})`);
       return response.json() as Promise<{tags: Tag[]}>;
     }).then(({tags}) => {
-      if (currentName !== decodeURIComponent(name) || detail.hidden) return;
+      if (currentName !== openedName || detail.hidden) return;
       currentTags = tags;
       const post = posts.find(post => post.name === currentName);
       if (post) { post.tags = tags; renderTagBar(); layout(); }
-      tagsOpen.disabled = false;
-    }).catch(error => { detailStatus.textContent = error instanceof Error ? error.message : 'Failed to load tags'; });
+      tagsReady = true;
+      tagsOpen.disabled = deleting;
+    }).catch(error => {
+      if (currentName === openedName && !detail.hidden) detailStatus.textContent = error instanceof Error ? error.message : 'Failed to load tags';
+    });
     back.focus({preventScroll: true});
   }
   async function moveDetail(step: -1 | 1) {
     try {
       if (!posts.length) posts = await fetchPosts();
-      if (detail.hidden || tagsSheet.open) return;
+      if (detail.hidden || tagsSheet.open || deleting) return;
       const name = adjacentName(posts, currentName, step, [...selected.keys()]);
       if (!name) return;
       const path = `/posts/${encodeURIComponent(name)}`;
@@ -633,7 +669,7 @@ if (typeof document !== 'undefined') {
   });
   document.addEventListener('keydown', event => {
     if (event.key === 'Escape' && !detail.hidden && !tagsSheet.open) back.click();
-    if (detail.hidden || tagsSheet.open || event.isComposing || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    if (detail.hidden || tagsSheet.open || deleting || event.isComposing || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
     event.preventDefault();
     void moveDetail(event.key === 'ArrowLeft' ? -1 : 1);
