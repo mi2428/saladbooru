@@ -52,8 +52,8 @@ func lockTags(data *os.Root) (*os.File, error) {
 }
 
 func validateTags(tags []string) error {
-	if tags == nil || len(tags) > 5 {
-		return errors.New("Tags must be an array of at most 5 entries")
+	if tags == nil || len(tags) > 10 {
+		return errors.New("Tags must be an array of at most 10 entries")
 	}
 	seen := map[string]bool{}
 	for _, name := range tags {

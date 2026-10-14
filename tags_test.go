@@ -78,6 +78,42 @@ func TestTagsAPIAndPersistence(t *testing.T) {
 	}
 }
 
+func TestTenTagsPerImage(t *testing.T) {
+	_, images, h := setup(t)
+	if err := os.WriteFile(filepath.Join(images, "one.png"), pngImage(t), 0600); err != nil {
+		t.Fatal(err)
+	}
+	tags := make([]string, 10)
+	for i := range tags {
+		tags[i] = fmt.Sprintf("Tag %02d", i)
+	}
+	request := func(values []string) string {
+		raw, err := json.Marshal(map[string][]string{"tags": values})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+	if w := putTags(t, h, "one.png", request(tags)); w.Code != 200 {
+		t.Fatalf("ten tags rejected: %d %s", w.Code, w.Body.String())
+	}
+	if w := putTags(t, h, "one.png", request(append(tags, "extra"))); w.Code != 400 {
+		t.Fatalf("eleven tags accepted: %d", w.Code)
+	}
+	if w := get(t, h, "/api/posts"); w.Code != 200 || !strings.Contains(w.Body.String(), `"Tag 09"`) || strings.Contains(w.Body.String(), `"extra"`) {
+		t.Fatalf("tag limit changed stored state: %d %s", w.Code, w.Body.String())
+	}
+	restarted, err := newServer(filepath.Dir(images))
+	if err != nil {
+		t.Fatal("restart with ten tags: ", err)
+	}
+	defer restarted.images.Close()
+	defer restarted.data.Close()
+	if w := get(t, restarted.routes(), "/api/posts/one.png/tags"); w.Code != 200 || !strings.Contains(w.Body.String(), `"Tag 09"`) {
+		t.Fatalf("ten tags lost after restart: %d %s", w.Code, w.Body.String())
+	}
+}
+
 func TestDeletePostRemovesImageAndTags(t *testing.T) {
 	s, images, h := setup(t)
 	data := filepath.Dir(images)
@@ -188,7 +224,7 @@ func TestTagsRejectInvalidAndUnsafeImages(t *testing.T) {
 		`null`, `{}`, `{"tags":null}`, `{"tags":{}}`, `{"tags":[]}`, `{"tags":[],"extra":1}`, `{"tags":[],"tags":[]}`,
 		`{"tags":[""]}`, `{"tags":[" x"]}`, `{"tags":[1]}`, `{"tags":[{"name":"x"}]}`,
 		`{"tags":["X","x"]}`, `{"tags":["` + strings.Repeat("x", 81) + `"]}`,
-		`{"tags":["x","y","z","a","b","c"]}`,
+		`{"tags":["a","b","c","d","e","f","g","h","i","j","k"]}`,
 	} {
 		if w := putTags(t, h, "one.png", body); w.Code != 400 {
 			t.Fatalf("invalid tag payload accepted (%d): %s", w.Code, body)
