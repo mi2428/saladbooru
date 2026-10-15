@@ -143,6 +143,24 @@ func readTags(data *os.Root) (map[string][]string, error) {
 	return tags, nil
 }
 
+// tagsForWrite requires tagsMu to be held; callers close the returned file lock.
+func (s *server) tagsForWrite() (map[string][]string, *os.File, error) {
+	if s.tagsFailed {
+		return nil, nil, errors.New("tag storage unavailable")
+	}
+	lock, err := lockTags(s.data)
+	if err != nil {
+		s.tagsFailed = true
+		return nil, nil, err
+	}
+	tags, err := readTags(s.data)
+	if err != nil {
+		lock.Close()
+		return nil, nil, err
+	}
+	return tags, lock, nil
+}
+
 func (s *server) getTags(w http.ResponseWriter, r *http.Request) {
 	s.tagsMu.RLock()
 	defer s.tagsMu.RUnlock()
@@ -213,22 +231,12 @@ func (s *server) putTags(w http.ResponseWriter, r *http.Request) {
 	}
 	s.tagsMu.Lock()
 	defer s.tagsMu.Unlock()
-	if s.tagsFailed {
-		http.Error(w, "Tag storage unavailable", http.StatusServiceUnavailable)
-		return
-	}
-	lock, err := lockTags(s.data)
+	previous, lock, err := s.tagsForWrite()
 	if err != nil {
-		s.tagsFailed = true
 		http.Error(w, "Tag storage unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	defer lock.Close()
-	previous, err := readTags(s.data)
-	if err != nil {
-		http.Error(w, "Tag storage unavailable", http.StatusServiceUnavailable)
-		return
-	}
 	name := r.PathValue("name")
 	f, _, _, err := s.openImage(name)
 	if err != nil {
@@ -261,22 +269,12 @@ func (s *server) deletePost(w http.ResponseWriter, r *http.Request) {
 	}
 	s.tagsMu.Lock()
 	defer s.tagsMu.Unlock()
-	if s.tagsFailed {
-		http.Error(w, "Tag storage unavailable", http.StatusServiceUnavailable)
-		return
-	}
-	lock, err := lockTags(s.data)
+	previous, lock, err := s.tagsForWrite()
 	if err != nil {
-		s.tagsFailed = true
 		http.Error(w, "Tag storage unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	defer lock.Close()
-	previous, err := readTags(s.data)
-	if err != nil {
-		http.Error(w, "Tag storage unavailable", http.StatusServiceUnavailable)
-		return
-	}
 	f, _, _, err := s.openImage(name)
 	if err != nil {
 		http.NotFound(w, r)

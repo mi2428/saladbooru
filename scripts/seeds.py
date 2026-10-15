@@ -144,7 +144,7 @@ def main() -> None:
     if any(path.is_symlink() for path in (DATA, REVIEW, IMAGES)):
         raise RuntimeError("Review data directory must not be a symlink")
     IMAGES.mkdir(parents=True, exist_ok=True)
-    # ponytail: interrupted initial seeding is not repaired; add a marker if needed.
+    # Interrupted initial seeding is not repaired; add a marker if needed.
     created: set[str] = set()
     for index in range(1000):
         path = IMAGES / f"review-{index:04d}.png"

@@ -1,5 +1,15 @@
 type Tag = string;
 type Post = {name: string; url: string; format: string; width: number; height: number; tags: Tag[]};
+type GalleryEntry = {
+  post: Post;
+  tile: HTMLDivElement;
+  link: HTMLAnchorElement;
+  ratio: number;
+  dots: HTMLDivElement;
+  dotLimit: number;
+  renderedTags?: Tag[];
+  renderedFilter?: string;
+};
 const TWITTER_IMAGE_ORIGIN = new URL('https://pbs.twimg.com');
 const key = (tag: Tag) => tag.toLowerCase();
 const TAG_COLORS = [
@@ -154,7 +164,9 @@ export function clickedOutsideDialog(event: Pick<MouseEvent, 'target' | 'clientX
   return event.clientX < left || event.clientX >= right || event.clientY < top || event.clientY >= bottom;
 }
 
-export function showImage(img: HTMLImageElement, url: string, onError: () => void, original = url, format?: string): void {
+type ImageSource = {url: string; original?: string; format?: string};
+
+export function showImage(img: HTMLImageElement, {url, original = url, format}: ImageSource, onError: () => void): void {
   const sources = url === original ? [url] : [url, original];
   const preview = original.replace(/^\/images\//, '/preview/');
   if (format === 'avif' || (!format && /\.avif(?:$|[?#])/i.test(original))) sources.push(preview);
@@ -252,19 +264,19 @@ if (typeof document !== 'undefined') {
   let previousFocus: HTMLElement | null = null;
   let sheetFocus: HTMLElement | null = null;
   let currentName = '';
-  let currentTags: Tag[] = [];
+  let detailTags: Tag[] = [];
   let tagsReady = false;
   let deleting = false;
-  let draft: Tag[] = [];
+  let draftTags: Tag[] = [];
   let saving = false;
   let posts: Post[] = [];
   let suggestionPool: Post[] = [];
-  const selected = new Map<string, Tag>();
-  const entries: {post: Post; tile: HTMLDivElement; link: HTMLAnchorElement; ratio: number; dots: HTMLDivElement; dotLimit: number; renderedTags?: Tag[]; renderedFilter?: string}[] = [];
+  const selectedTags = new Map<string, Tag>();
+  const entries: GalleryEntry[] = [];
   const pendingUploads: File[] = [];
   let uploading = false;
   let preferredHeight = () => 220;
-  function createEntry(post: Post): typeof entries[number] {
+  function createEntry(post: Post): GalleryEntry {
     const tile = document.createElement('div');
     const link = document.createElement('a');
     const img = document.createElement('img');
@@ -284,7 +296,7 @@ if (typeof document !== 'undefined') {
     tile.append(link, dots);
     // Keep potentially animated formats moving in the gallery.
     const tileURL = post.format === 'jpeg' || post.format === 'png' ? post.url.replace(/^\/images\//, '/thumbs/') : post.url;
-    showImage(img, tileURL, () => { status.textContent = 'Some images cannot be displayed'; }, post.url, post.format);
+    showImage(img, {url: tileURL, original: post.url, format: post.format}, () => { status.textContent = 'Some images cannot be displayed'; });
     return entry;
   }
   function option(tag: Tag, active: boolean, action: () => void): HTMLButtonElement {
@@ -299,9 +311,9 @@ if (typeof document !== 'undefined') {
     return button;
   }
 
-  function renderDots(entry: typeof entries[number], width: number) {
+  function renderDots(entry: GalleryEntry, width: number) {
     const limit = width < 92 ? 1 : width < 140 ? 3 : 5;
-    const filter = [...selected.keys()].join('\0');
+    const filter = [...selectedTags.keys()].join('\0');
     if (entry.dotLimit === limit && entry.renderedTags === entry.post.tags && entry.renderedFilter === filter) return;
     entry.dotLimit = limit;
     entry.renderedTags = entry.post.tags;
@@ -314,7 +326,7 @@ if (typeof document !== 'undefined') {
       button.className = 'tag-dot-button';
       button.title = `Filter by ${tag}`;
       button.setAttribute('aria-label', `Filter by tag ${tag}`);
-      button.setAttribute('aria-pressed', String(selected.has(key(tag))));
+      button.setAttribute('aria-pressed', String(selectedTags.has(key(tag))));
       const dot = document.createElement('span');
       dot.className = 'dot';
       dot.style.setProperty('--tag-color', tagColor(tag));
@@ -328,7 +340,7 @@ if (typeof document !== 'undefined') {
   function layout() {
     const width = grid.clientWidth;
     if (!width) return;
-    const selectedKeys = [...selected.keys()];
+    const selectedKeys = [...selectedTags.keys()];
     const visible = entries.filter(({post}) => selectedKeys.every(id => post.tags.some(tag => key(tag) === id)));
     const {positions, height} = layoutRows(visible.map(entry => entry.ratio), width, preferredHeight());
     const visibleSet = new Set(visible);
@@ -339,7 +351,7 @@ if (typeof document !== 'undefined') {
       renderDots(entry, rect.width);
     });
     grid.style.height = `${height}px`;
-    status.textContent = selected.size && visible.length === 0 ? 'No images match these filters' : entries.length ? '' : 'No images yet';
+    status.textContent = selectedTags.size && visible.length === 0 ? 'No images match these filters' : entries.length ? '' : 'No images yet';
   }
   let scheduled = false;
   function scheduleLayout() {
@@ -351,14 +363,14 @@ if (typeof document !== 'undefined') {
   function renderTagBar(focus?: string) {
     tagOptions.replaceChildren();
     let focused: HTMLButtonElement | undefined;
-    for (const tag of filterTags(posts, selected)) {
+    for (const tag of filterTags(posts, selectedTags)) {
       const id = key(tag);
-      const button = option(tag, selected.has(id), () => toggleFilter(tag));
+      const button = option(tag, selectedTags.has(id), () => toggleFilter(tag));
       button.classList.add('tag-filter');
       tagOptions.append(button);
       if (id === focus) focused = button;
     }
-    clearFilters.hidden = selected.size === 0;
+    clearFilters.hidden = selectedTags.size === 0;
     tagOptions.scrollLeft = 0;
     focused?.focus({preventScroll: true});
     focused?.scrollIntoView({block: 'nearest', inline: 'nearest'});
@@ -386,26 +398,26 @@ if (typeof document !== 'undefined') {
   }
   function toggleFilter(tag: Tag) {
     const id = key(tag);
-    if (selected.has(id)) selected.delete(id);
-    else selected.set(id, tag);
+    if (selectedTags.has(id)) selectedTags.delete(id);
+    else selectedTags.set(id, tag);
     renderTagBar(id);
     layout();
   }
   clearFilters.addEventListener('click', () => {
-    selected.clear();
+    selectedTags.clear();
     renderTagBar();
     layout();
     tagOptions.querySelector<HTMLButtonElement>('button')?.focus({preventScroll: true});
   });
   function validateDraft(tag: Tag): string {
     if (!tag || tag.trim() !== tag || Array.from(tag).length > 80 || /[\p{Cc}\p{Cf}]/u.test(tag)) return 'Name must be 1–80 characters without outer spaces';
-    if (draft.some(current => key(current) === key(tag))) return 'This tag is already added';
+    if (draftTags.some(current => key(current) === key(tag))) return 'This tag is already added';
     return '';
   }
   function renderSuggestions() {
     suggestions.replaceChildren();
     const query = nameInput.value.trim().toLowerCase();
-    const matches = tagsByUse(suggestionPool).filter(tag => !draft.some(current => key(tag) === key(current)) && (!query || key(tag).includes(query))).slice(0, query ? 8 : 6);
+    const matches = tagsByUse(suggestionPool).filter(tag => !draftTags.some(current => key(tag) === key(current)) && (!query || key(tag).includes(query))).slice(0, query ? 8 : 6);
     suggestions.hidden = matches.length === 0;
     for (const tag of matches) {
       suggestions.append(option(tag, false, () => addTag(tag)));
@@ -413,7 +425,7 @@ if (typeof document !== 'undefined') {
   }
   function renderChips() {
     chips.replaceChildren();
-    for (const tag of draft) {
+    for (const tag of draftTags) {
       const chip = document.createElement('span');
       chip.className = 'tag-chip';
       chip.style.setProperty('--tag-color', tagColor(tag));
@@ -423,17 +435,17 @@ if (typeof document !== 'undefined') {
       remove.type = 'button';
       remove.textContent = '×';
       remove.setAttribute('aria-label', `Remove ${tag}`);
-      remove.addEventListener('click', () => { draft = draft.filter(current => current !== tag); renderChips(); renderSuggestions(); });
+      remove.addEventListener('click', () => { draftTags = draftTags.filter(current => current !== tag); renderChips(); renderSuggestions(); });
       chip.append(label, remove);
       chips.append(chip);
     }
-    if (!draft.length) chips.textContent = 'No tags';
+    if (!draftTags.length) chips.textContent = 'No tags';
   }
   function addTag(tag: Tag) {
     if (saveButton.disabled) return;
     tagError.textContent = validateDraft(tag);
     if (tagError.textContent) return;
-    draft.push(tag);
+    draftTags.push(tag);
     nameInput.value = '';
     renderChips();
     renderSuggestions();
@@ -451,7 +463,7 @@ if (typeof document !== 'undefined') {
   tagsSheet.addEventListener('close', () => sheetFocus?.focus({preventScroll: true}));
   tagsOpen.addEventListener('click', () => {
     sheetFocus = tagsOpen;
-    draft = currentTags.slice();
+    draftTags = detailTags.slice();
     saveButton.disabled = !galleryLoaded;
     tagError.classList.toggle('loading', !galleryLoaded);
     tagError.textContent = galleryLoaded ? '' : 'Loading existing tags…';
@@ -488,11 +500,11 @@ if (typeof document !== 'undefined') {
     tagsSheet.querySelectorAll<HTMLInputElement | HTMLButtonElement>('input, button').forEach(control => { control.disabled = true; });
     try {
       const response = await fetch(`/api/posts/${encodeURIComponent(currentName)}/tags`, {
-        method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({tags: draft}),
+        method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({tags: draftTags}),
       });
       if (!response.ok) throw new Error(`Could not save tags (${response.status})`);
       const result = await response.json() as {tags: Tag[]};
-      currentTags = result.tags;
+      detailTags = result.tags;
       const post = posts.find(post => post.name === currentName);
       if (post) post.tags = result.tags;
       renderTagBar();
@@ -625,9 +637,9 @@ if (typeof document !== 'undefined') {
     renderImage();
     detailStatus.textContent = '';
     full.alt = currentName;
-    showImage(full, `/images/${name}`, () => {
+    showImage(full, {url: `/images/${name}`, format: posts.find(post => post.name === openedName)?.format}, () => {
       if (currentName === openedName && !detail.hidden) detailStatus.textContent = 'This image cannot be displayed';
-    }, undefined, posts.find(post => post.name === openedName)?.format);
+    });
     tagsReady = false;
     tagsOpen.disabled = true;
     deleteButton.disabled = deleting;
@@ -636,7 +648,7 @@ if (typeof document !== 'undefined') {
       return response.json() as Promise<{tags: Tag[]}>;
     }).then(({tags}) => {
       if (currentName !== openedName || detail.hidden) return;
-      currentTags = tags;
+      detailTags = tags;
       const post = posts.find(post => post.name === currentName);
       if (post) { post.tags = tags; renderTagBar(); layout(); }
       tagsReady = true;
@@ -650,7 +662,7 @@ if (typeof document !== 'undefined') {
     try {
       if (!posts.length) posts = await fetchPosts();
       if (detail.hidden || tagsSheet.open || deleting) return;
-      const name = adjacentName(posts, currentName, step, [...selected.keys()]);
+      const name = adjacentName(posts, currentName, step, [...selectedTags.keys()]);
       if (!name) return;
       const path = `/posts/${encodeURIComponent(name)}`;
       history.replaceState(null, '', path);

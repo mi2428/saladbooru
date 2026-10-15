@@ -10,7 +10,7 @@ FROM --platform=$BUILDPLATFORM golang:1.26.9-alpine3.23@sha256:6750308561953d451
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
-COPY main.go tags.go ./
+COPY main.go tags.go thumbnail.go ./
 COPY static ./static
 COPY --from=web /src/static/app.js ./static/app.js
 ARG TARGETOS=linux

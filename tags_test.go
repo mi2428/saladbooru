@@ -61,7 +61,7 @@ func TestTagsAPIAndPersistence(t *testing.T) {
 	if w := get(t, h, url); w.Code != 200 || !strings.Contains(w.Body.String(), "作品 ひとつ") {
 		t.Fatalf("direct tag read: %d %s", w.Code, w.Body.String())
 	}
-	restarted, err := newServer(data)
+	restarted, err := newServer(data, defaultThumbnailCacheLimit)
 	if err != nil {
 		t.Fatal("restart: ", err)
 	}
@@ -103,7 +103,7 @@ func TestManyTagsPerImage(t *testing.T) {
 	if w := get(t, h, "/api/posts"); w.Code != 200 || !strings.Contains(w.Body.String(), `"Tag 299 extra"`) {
 		t.Fatalf("tags missing from list: %d %s", w.Code, w.Body.String())
 	}
-	restarted, err := newServer(filepath.Dir(images))
+	restarted, err := newServer(filepath.Dir(images), defaultThumbnailCacheLimit)
 	if err != nil {
 		t.Fatal("restart with many tags: ", err)
 	}
@@ -156,7 +156,7 @@ func TestDeletePostRemovesImageAndTags(t *testing.T) {
 	if w := removePost(t, h, "other.png"); w.Code != 204 {
 		t.Fatalf("delete untagged image: %d", w.Code)
 	}
-	restarted, err := newServer(data)
+	restarted, err := newServer(data, defaultThumbnailCacheLimit)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +200,7 @@ func TestDeletePostRestoresImageWhenTagsCannotBeSaved(t *testing.T) {
 	if err := os.Chmod(stored, 0600); err != nil {
 		t.Fatal(err)
 	}
-	restarted, err := newServer(filepath.Dir(images))
+	restarted, err := newServer(filepath.Dir(images), defaultThumbnailCacheLimit)
 	if err != nil {
 		t.Fatal("restart after failed deletion: ", err)
 	}
@@ -269,7 +269,7 @@ func TestTagSaveFailureAndCorruptStartup(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(data, "tags.json"), []byte(bad), 0600); err != nil {
 			t.Fatal(err)
 		}
-		if restarted, err := newServer(data); err == nil {
+		if restarted, err := newServer(data, defaultThumbnailCacheLimit); err == nil {
 			restarted.images.Close()
 			restarted.data.Close()
 			t.Fatalf("corrupt tags accepted: %s", bad)
@@ -281,7 +281,7 @@ func TestTagSaveFailureAndCorruptStartup(t *testing.T) {
 	if err := os.Symlink(filepath.Join(images, "one.png"), filepath.Join(data, "tags.json")); err != nil {
 		t.Fatal(err)
 	}
-	if restarted, err := newServer(data); err == nil {
+	if restarted, err := newServer(data, defaultThumbnailCacheLimit); err == nil {
 		restarted.images.Close()
 		restarted.data.Close()
 		t.Fatal("symlink tag file accepted")
@@ -295,7 +295,7 @@ func TestTagSaveFailureAndCorruptStartup(t *testing.T) {
 	if err := os.Chmod(filepath.Join(data, "tags.json"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if restarted, err := newServer(data); err == nil {
+	if restarted, err := newServer(data, defaultThumbnailCacheLimit); err == nil {
 		restarted.images.Close()
 		restarted.data.Close()
 		t.Fatal("public tag file accepted")
@@ -369,7 +369,7 @@ func TestDedupeMergesTaggedContent(t *testing.T) {
 	if removed, err := dedupe(s.images, s.data); err != nil || removed != 0 {
 		t.Fatalf("dedupe must be idempotent: %d %v", removed, err)
 	}
-	restarted, err := newServer(filepath.Dir(images))
+	restarted, err := newServer(filepath.Dir(images), defaultThumbnailCacheLimit)
 	if err != nil {
 		t.Fatal("restart after dedupe: ", err)
 	}

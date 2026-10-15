@@ -36,7 +36,7 @@ func pngImage(t *testing.T) []byte {
 func setup(t *testing.T) (*server, string, http.Handler) {
 	t.Helper()
 	data := t.TempDir()
-	s, err := newServer(data)
+	s, err := newServer(data, defaultThumbnailCacheLimit)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -563,9 +563,9 @@ func TestThumbnailCacheLimit(t *testing.T) {
 	if err := os.Unsetenv(setting); err != nil {
 		t.Fatal(err)
 	}
-	defaultServer, _, _ := setup(t)
-	if defaultServer.thumbLimit != 64<<20 {
-		t.Fatalf("default cache limit: %d", defaultServer.thumbLimit)
+	defaultLimit, err := thumbnailCacheLimit()
+	if err != nil || defaultLimit != 64<<20 {
+		t.Fatalf("default cache limit: %d %v", defaultLimit, err)
 	}
 	for _, tc := range []struct {
 		setting string
@@ -581,19 +581,25 @@ func TestThumbnailCacheLimit(t *testing.T) {
 	} {
 		t.Run(tc.setting, func(t *testing.T) {
 			t.Setenv(setting, tc.setting)
+			limit, err := thumbnailCacheLimit()
 			if tc.invalid {
-				if s, err := newServer(t.TempDir()); err == nil {
-					s.images.Close()
-					s.data.Close()
+				if err == nil {
 					t.Fatal("invalid cache limit accepted")
 				}
 				return
 			}
-			s, images, h := setup(t)
-			if s.thumbLimit != tc.limit {
-				t.Fatalf("cache limit %d, want %d", s.thumbLimit, tc.limit)
+			if err != nil || limit != tc.limit {
+				t.Fatalf("cache limit %d, want %d: %v", limit, tc.limit, err)
 			}
 			if tc.limit == 0 {
+				data := t.TempDir()
+				s, err := newServer(data, limit)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { s.images.Close(); s.data.Close() })
+				h := s.routes()
+				images := filepath.Join(data, "images")
 				if err := os.WriteFile(filepath.Join(images, "uncached.png"), pngImage(t), 0600); err != nil {
 					t.Fatal(err)
 				}
@@ -735,14 +741,14 @@ func TestStartupRejectsSymlinkImageDirectory(t *testing.T) {
 	if err := os.Symlink(t.TempDir(), filepath.Join(data, "images")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := newServer(data); err == nil {
+	if _, err := newServer(data, defaultThumbnailCacheLimit); err == nil {
 		t.Fatal("symlink image directory accepted")
 	}
 }
 
 func BenchmarkList(b *testing.B) {
 	data := b.TempDir()
-	s, err := newServer(data)
+	s, err := newServer(data, defaultThumbnailCacheLimit)
 	if err != nil {
 		b.Fatal(err)
 	}
