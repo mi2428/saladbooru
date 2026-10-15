@@ -207,6 +207,10 @@ export function shouldSubmitTagOnEnter(event: Pick<KeyboardEvent, 'key' | 'isCom
   return event.key === 'Enter' && !event.isComposing && event.keyCode !== 229;
 }
 
+export function shouldExitSelectionOnEscape(event: Pick<KeyboardEvent, 'key' | 'isComposing'>, selectionMode: boolean, detailHidden: boolean, dialogOpen: boolean): boolean {
+  return event.key === 'Escape' && !event.isComposing && selectionMode && detailHidden && !dialogOpen;
+}
+
 export function clickedOutsideDialog(event: Pick<MouseEvent, 'target' | 'clientX' | 'clientY'>, dialog: HTMLDialogElement): boolean {
   if (event.target !== dialog) return false;
   const {left, right, top, bottom} = dialog.getBoundingClientRect();
@@ -1091,6 +1095,11 @@ if (typeof document !== 'undefined') {
     }
   });
   document.addEventListener('keydown', event => {
+    if (shouldExitSelectionOnEscape(event, selectionMode, Boolean(detail.hidden), tagsSheet.open)) {
+      event.preventDefault();
+      batchClear.click();
+      return;
+    }
     if (event.key === 'Escape' && !detail.hidden && !tagsSheet.open) back.click();
     if (detail.hidden || tagsSheet.open || deleting || event.isComposing || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;

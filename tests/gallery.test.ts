@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {layoutRows, windowRange, installZoom, imageRatio, showImage, uploadFiles, clipboardImages, droppedImageURL, fetchDroppedImage, shouldSubmitTagOnEnter, clickedOutsideDialog, tagColor, tagsByUse, filterTags, isNSFW, allowedPosts, tagSuggestions, adjacentName, selectionRange, shouldRefreshPull, pullIntent, pullOffset, detailTapStep} from '../src/app.ts';
+import {layoutRows, windowRange, installZoom, imageRatio, showImage, uploadFiles, clipboardImages, droppedImageURL, fetchDroppedImage, shouldSubmitTagOnEnter, shouldExitSelectionOnEscape, clickedOutsideDialog, tagColor, tagsByUse, filterTags, isNSFW, allowedPosts, tagSuggestions, adjacentName, selectionRange, shouldRefreshPull, pullIntent, pullOffset, detailTapStep} from '../src/app.ts';
 
 test('only AVIF falls back to preview, other formats retry once', () => {
   for (const name of ['x.avif', 'x.AVIF']) {
@@ -172,6 +172,16 @@ test('IME confirmation Enter does not submit a tag', () => {
   assert.equal(shouldSubmitTagOnEnter({key: 'Enter', isComposing: false, keyCode: 229}), false);
   assert.equal(shouldSubmitTagOnEnter({key: 'Enter', isComposing: false, keyCode: 13}), true);
   assert.equal(shouldSubmitTagOnEnter({key: 'a', isComposing: false, keyCode: 65}), false);
+});
+
+test('Escape exits selection mode only from the gallery without an open dialog', () => {
+  const event = (key: string, isComposing = false) => ({key, isComposing});
+  assert.equal(shouldExitSelectionOnEscape(event('Escape'), true, true, false), true);
+  assert.equal(shouldExitSelectionOnEscape(event('Escape'), false, true, false), false);
+  assert.equal(shouldExitSelectionOnEscape(event('Escape'), true, false, false), false);
+  assert.equal(shouldExitSelectionOnEscape(event('Escape'), true, true, true), false);
+  assert.equal(shouldExitSelectionOnEscape(event('Escape', true), true, true, false), false);
+  assert.equal(shouldExitSelectionOnEscape(event('Enter'), true, true, false), false);
 });
 
 test('only a click on the backdrop dismisses the tag dialog', () => {
