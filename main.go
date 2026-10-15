@@ -18,6 +18,7 @@ import (
 	"log/slog"
 	"maps"
 	"mime"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"os"
@@ -431,6 +432,34 @@ func randomName() (string, error) {
 	return hex.EncodeToString(id[:]), nil
 }
 
+func readUploadTags(reader *multipart.Reader) ([]string, error) {
+	part, err := reader.NextPart()
+	if errors.Is(err, io.EOF) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if part.FormName() != "tags" || part.FileName() != "" {
+		return nil, errors.New("unexpected multipart field")
+	}
+	raw, err := io.ReadAll(io.LimitReader(part, 16<<20+1))
+	if err != nil || len(raw) > 16<<20 {
+		return nil, errors.New("invalid tag field")
+	}
+	tags, err := decodeTagList(raw)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := reader.NextPart(); !errors.Is(err, io.EOF) {
+		if err == nil {
+			err = errors.New("extra multipart field")
+		}
+		return nil, err
+	}
+	return tags, nil
+}
+
 func (s *server) upload(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	contentType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
@@ -467,14 +496,9 @@ func (s *server) upload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer s.images.Remove(temp)
 	_, copyErr := io.Copy(f, part)
+	var tags []string
 	if copyErr == nil {
-		_, copyErr = reader.NextPart()
-		if copyErr == nil {
-			copyErr = errors.New("extra multipart field")
-		}
-		if errors.Is(copyErr, io.EOF) {
-			copyErr = nil
-		}
+		tags, copyErr = readUploadTags(reader)
 	}
 	if copyErr == nil {
 		copyErr = f.Sync()
@@ -502,20 +526,43 @@ func (s *server) upload(w http.ResponseWriter, r *http.Request) {
 		ext = ".jpg"
 	}
 	name := id + ext
+	stat, err := s.images.Stat(temp)
+	if err != nil {
+		http.Error(w, "Storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	var stored map[string][]string
+	if len(tags) > 0 {
+		s.tagsMu.Lock()
+		defer s.tagsMu.Unlock()
+		var lock *os.File
+		stored, lock, err = s.tagsForWrite()
+		if err != nil {
+			http.Error(w, "Tag storage unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		defer lock.Close()
+	}
 	if err := s.images.Rename(temp, name); err != nil {
 		http.Error(w, "Storage unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	stat, err := s.images.Stat(name)
-	if err != nil {
-		http.Error(w, "Storage unavailable", http.StatusServiceUnavailable)
-		return
+	if stored != nil {
+		stored[name] = tags
+		if err := s.saveTags(stored); err != nil {
+			if removeErr := s.images.Remove(name); removeErr != nil {
+				s.tagsFailed = true
+				slog.Error("could not roll back tagged upload", "error", removeErr)
+			}
+			http.Error(w, "Tag storage unavailable", http.StatusServiceUnavailable)
+			return
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(struct {
 		Item item `json:"item"`
-	}{item{Name: name, URL: "/images/" + name, Format: format, Width: width, Height: height, Modified: stat.ModTime()}})
+	}{item{Name: name, URL: "/images/" + name, Format: format, Width: width, Height: height, Modified: stat.ModTime(), Tags: tags}})
 }
 
 type duplicate struct {

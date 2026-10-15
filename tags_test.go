@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -30,6 +32,83 @@ func removePost(t *testing.T, h http.Handler, name string) *httptest.ResponseRec
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, httptest.NewRequest("DELETE", "/api/posts/"+name, nil))
 	return w
+}
+
+func taggedPost(t *testing.T, h http.Handler, tags string, extra ...string) *httptest.ResponseRecorder {
+	t.Helper()
+	var body bytes.Buffer
+	form := multipart.NewWriter(&body)
+	file, err := form.CreateFormFile("file", "pasted.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Write(pngImage(t)); err != nil {
+		t.Fatal(err)
+	}
+	if err := form.WriteField("tags", tags); err != nil {
+		t.Fatal(err)
+	}
+	if len(extra) > 0 {
+		if err := form.WriteField("extra", extra[0]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := form.Close(); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest("POST", "/api/posts", &body)
+	request.Header.Set("Content-Type", form.FormDataContentType())
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, request)
+	return w
+}
+
+func TestTaggedUploadIsSavedWithImage(t *testing.T) {
+	s, images, h := setup(t)
+	response := taggedPost(t, h, `["Blue","赤"]`)
+	if response.Code != 201 {
+		t.Fatalf("tagged upload: %d %s", response.Code, response.Body.String())
+	}
+	var result struct {
+		Item item `json:"item"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(result.Item.Tags, []string{"Blue", "赤"}) {
+		t.Fatalf("upload response lost tags: %+v", result.Item)
+	}
+	stored, err := readTags(s.data)
+	if err != nil || !slices.Equal(stored[result.Item.Name], []string{"Blue", "赤"}) {
+		t.Fatalf("uploaded tags: %v %v", stored, err)
+	}
+	if image := get(t, h, result.Item.URL); image.Code != 200 || !bytes.Equal(image.Body.Bytes(), pngImage(t)) {
+		t.Fatal("tagged upload altered image")
+	}
+	for _, tags := range []string{`null`, `["blue","Blue"]`, `{"tags":[]}`} {
+		if failed := taggedPost(t, h, tags); failed.Code != 400 {
+			t.Fatalf("invalid tags accepted (%s): %d", tags, failed.Code)
+		}
+	}
+	if failed := taggedPost(t, h, `["Blue"]`, "unexpected"); failed.Code != 400 {
+		t.Fatalf("extra multipart field accepted: %d", failed.Code)
+	}
+	if entries, err := os.ReadDir(images); err != nil || len(entries) != 1 {
+		t.Fatalf("invalid upload left files: %v %v", entries, err)
+	}
+}
+
+func TestTaggedUploadFailsWithoutTagStorage(t *testing.T) {
+	s, images, h := setup(t)
+	if err := s.data.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if response := taggedPost(t, h, `["Blue"]`); response.Code != 503 {
+		t.Fatalf("upload without tag storage: %d", response.Code)
+	}
+	if entries, err := os.ReadDir(images); err != nil || len(entries) != 0 {
+		t.Fatalf("failed upload left files: %v %v", entries, err)
+	}
 }
 
 func TestTagsAPIAndPersistence(t *testing.T) {

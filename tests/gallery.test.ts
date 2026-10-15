@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {layoutRows, installZoom, imageRatio, showImage, uploadFiles, droppedImageURL, fetchDroppedImage, shouldSubmitTagOnEnter, clickedOutsideDialog, tagColor, tagsByUse, filterTags, adjacentName, detailTapStep} from '../src/app.ts';
+import {layoutRows, installZoom, imageRatio, showImage, uploadFiles, clipboardImages, droppedImageURL, fetchDroppedImage, shouldSubmitTagOnEnter, clickedOutsideDialog, tagColor, tagsByUse, filterTags, adjacentName, detailTapStep} from '../src/app.ts';
 
 test('only AVIF falls back to preview, other formats retry once', () => {
   for (const name of ['x.avif', 'x.AVIF']) {
@@ -93,6 +93,42 @@ test('uploads dropped files one at a time and continues after failures', async (
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test('uploads selected tags with the image in one multipart request', async () => {
+  const originalFetch = globalThis.fetch;
+  let requests = 0;
+  globalThis.fetch = async (url, init) => {
+    assert.equal(url, '/api/posts');
+    assert.ok(init?.body instanceof FormData);
+    assert.deepEqual(Array.from(init.body.keys()), ['file', 'tags']);
+    assert.equal(init.body.get('tags'), '["Blue","red"]');
+    requests++;
+    return new Response(null, {status: 201});
+  };
+  try {
+    assert.deepEqual(await uploadFiles([new File(['image'], 'image.png')], () => {}, ['Blue', 'red']), []);
+    assert.equal(requests, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('clipboard uploads only image files and gives nameless images an upload filename', async () => {
+  const image = new File(['pixels'], '', {type: 'image/png'});
+  const second = new File(['jpeg'], 'second.jpg', {type: 'image/jpeg'});
+  const text = new File(['notes'], 'notes.txt', {type: 'text/plain'});
+  const fromFiles = clipboardImages({files: [image, text, second] as unknown as FileList, items: [] as unknown as DataTransferItemList});
+  assert.deepEqual(fromFiles.map(file => file.name), ['pasted-image', 'second.jpg']);
+  assert.equal(fromFiles[0].type, 'image/png');
+  assert.equal(await fromFiles[0].text(), 'pixels');
+  assert.deepEqual(clipboardImages({files: [text] as unknown as FileList, items: [] as unknown as DataTransferItemList}), []);
+  const items = [
+    {kind: 'file', type: 'image/png', getAsFile: () => image},
+    {kind: 'file', type: 'image/jpeg', getAsFile: () => second},
+    {kind: 'string', type: 'text/plain', getAsFile: () => null},
+  ] as unknown as DataTransferItemList;
+  assert.deepEqual(clipboardImages({files: [] as unknown as FileList, items}).map(file => file.name), ['pasted-image', 'second.jpg']);
 });
 
 test('imports CORS-enabled Twitter image URLs as uploadable files', async () => {

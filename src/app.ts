@@ -182,13 +182,14 @@ export function showImage(img: HTMLImageElement, {url, original = url, format}: 
   img.src = url;
 }
 
-export async function uploadFiles(files: readonly File[], onProgress: (file: File, index: number) => void): Promise<File[]> {
+export async function uploadFiles(files: readonly File[], onProgress: (file: File, index: number) => void, tags: readonly Tag[] = []): Promise<File[]> {
   const failed: File[] = [];
   for (const [index, file] of files.entries()) {
     onProgress(file, index);
     try {
       const form = new FormData();
       form.append('file', file, file.name);
+      if (tags.length) form.append('tags', JSON.stringify(tags));
       const response = await fetch('/api/posts', {method: 'POST', body: form});
       if (!response.ok) throw new Error(`Upload failed (${response.status})`);
     } catch {
@@ -196,6 +197,19 @@ export async function uploadFiles(files: readonly File[], onProgress: (file: Fil
     }
   }
   return failed;
+}
+
+export function clipboardImages(data: Pick<DataTransfer, 'files' | 'items'>): File[] {
+  const files = Array.from(data.files).filter(file => file.type.startsWith('image/'));
+  if (!files.length) {
+    for (const item of Array.from(data.items ?? [])) {
+      if (item.kind === 'file' && item.type.startsWith('image/')) {
+        const file = item.getAsFile();
+        if (file) files.push(file);
+      }
+    }
+  }
+  return files.map(file => file.name ? file : new File([file], 'pasted-image', {type: file.type}));
 }
 
 export function droppedImageURL(data: Pick<DataTransfer, 'getData'>): string | null {
@@ -273,7 +287,7 @@ if (typeof document !== 'undefined') {
   let suggestionPool: Post[] = [];
   const selectedTags = new Map<string, Tag>();
   const entries: GalleryEntry[] = [];
-  const pendingUploads: File[] = [];
+  const pendingUploads: {files: File[]; tags: Tag[]}[] = [];
   let uploading = false;
   let preferredHeight = () => 220;
   function createEntry(post: Post): GalleryEntry {
@@ -557,11 +571,11 @@ if (typeof document !== 'undefined') {
     const failed: File[] = [];
     try {
       while (pendingUploads.length) {
-        const batch = pendingUploads.splice(0);
-        const batchFailed = await uploadFiles(batch, (file, index) => {
-          status.textContent = `Uploading ${index + 1} of ${batch.length}: ${file.name}`;
-        });
-        uploaded += batch.length - batchFailed.length;
+        const batch = pendingUploads.shift()!;
+        const batchFailed = await uploadFiles(batch.files, (file, index) => {
+          status.textContent = `Uploading ${index + 1} of ${batch.files.length}: ${file.name}`;
+        }, batch.tags);
+        uploaded += batch.files.length - batchFailed.length;
         failed.push(...batchFailed);
       }
       if (uploaded) {
@@ -584,14 +598,14 @@ if (typeof document !== 'undefined') {
       if (pendingUploads.length) void processUploads();
     }
   }
-  function queueUploads(files: File[]) {
-    pendingUploads.push(...files);
+  function queueUploads(files: File[], tags = [...selectedTags.values()]) {
+    pendingUploads.push({files, tags});
     void processUploads();
   }
-  async function queueDroppedImage(value: string) {
+  async function queueDroppedImage(value: string, tags: Tag[]) {
     status.textContent = 'Fetching dropped image…';
     try {
-      queueUploads([await fetchDroppedImage(value)]);
+      queueUploads([await fetchDroppedImage(value)], tags);
     } catch (error) {
       status.textContent = error instanceof TypeError
         ? 'Could not fetch image. The source may block cross-origin access.'
@@ -809,27 +823,27 @@ if (typeof document !== 'undefined') {
     return !!types && ['text/uri-list', 'text/html', 'text/plain', 'DownloadURL', 'application/x-moz-file-promise-url'].some(type => types.includes(type));
   };
   const acceptsDrop = (event: DragEvent) => acceptsFiles(event) || acceptsURL(event);
-  const galleryAcceptsDrops = () => location.pathname === '/' && detail.hidden && !tagsSheet.open;
+  const galleryAcceptsUploads = () => location.pathname === '/' && detail.hidden && !tagsSheet.open;
   let dragDepth = 0;
   const clearDropOverlay = () => { dragDepth = 0; dropOverlay.hidden = true; };
   document.addEventListener('dragenter', event => {
-    if (!galleryAcceptsDrops() || !acceptsDrop(event)) return;
+    if (!galleryAcceptsUploads() || !acceptsDrop(event)) return;
     event.preventDefault();
     dragDepth++;
     dropOverlay.hidden = false;
   });
   document.addEventListener('dragover', event => {
-    if (!galleryAcceptsDrops()) return;
+    if (!galleryAcceptsUploads()) return;
     event.preventDefault();
     if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
   });
   document.addEventListener('dragleave', event => {
-    if (!galleryAcceptsDrops() || !acceptsDrop(event)) return;
+    if (!galleryAcceptsUploads() || !acceptsDrop(event)) return;
     dragDepth = Math.max(0, dragDepth - 1);
     if (!dragDepth) dropOverlay.hidden = true;
   });
   document.addEventListener('drop', event => {
-    if (!galleryAcceptsDrops()) return;
+    if (!galleryAcceptsUploads()) return;
     event.preventDefault();
     clearDropOverlay();
     const files = Array.from(event.dataTransfer?.files ?? []);
@@ -837,9 +851,16 @@ if (typeof document !== 'undefined') {
       queueUploads(files);
     } else if (event.dataTransfer) {
       const url = droppedImageURL(event.dataTransfer);
-      if (url) void queueDroppedImage(url);
+      if (url) void queueDroppedImage(url, [...selectedTags.values()]);
       else status.textContent = 'Drop an image file or a supported Twitter image URL.';
     }
+  });
+  document.addEventListener('paste', event => {
+    if (!galleryAcceptsUploads() || (event.target instanceof Element && event.target.closest('input, textarea, [contenteditable]'))) return;
+    const files = event.clipboardData && clipboardImages(event.clipboardData);
+    if (!files?.length) return;
+    event.preventDefault();
+    queueUploads(files);
   });
   window.addEventListener('blur', clearDropOverlay);
   const match = location.pathname.match(/^\/posts\/([^/]+)$/);
