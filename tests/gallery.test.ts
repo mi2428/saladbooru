@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {layoutRows, installZoom, imageRatio, showImage, uploadFiles, clipboardImages, droppedImageURL, fetchDroppedImage, shouldSubmitTagOnEnter, clickedOutsideDialog, tagColor, tagsByUse, filterTags, adjacentName, selectionRange, detailTapStep} from '../src/app.ts';
+import {layoutRows, installZoom, imageRatio, showImage, uploadFiles, clipboardImages, droppedImageURL, fetchDroppedImage, shouldSubmitTagOnEnter, clickedOutsideDialog, tagColor, tagsByUse, filterTags, adjacentName, selectionRange, shouldRefreshPull, detailTapStep} from '../src/app.ts';
 
 test('only AVIF falls back to preview, other formats retry once', () => {
   for (const name of ['x.avif', 'x.AVIF']) {
@@ -221,6 +221,12 @@ test('Shift selects an inclusive range in either direction, never across missing
   assert.deepEqual(selectionRange(names, 'fourth', 'second'), [1, 3]);
   assert.deepEqual(selectionRange(names, 'third', 'third'), [2, 2]);
   assert.equal(selectionRange(names, 'missing', 'second'), null);
+});
+
+test('pull-to-refresh requires a released pull past the threshold at the top', () => {
+  assert.equal(shouldRefreshPull(79, true), false);
+  assert.equal(shouldRefreshPull(80, true), true);
+  assert.equal(shouldRefreshPull(120, false), false);
 });
 
 test('viewer taps and mouse clicks use screen halves without intercepting viewer controls', () => {

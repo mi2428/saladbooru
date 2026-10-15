@@ -11,6 +11,7 @@ type GalleryEntry = {
   renderedFilter?: string;
 };
 const TWITTER_IMAGE_ORIGIN = new URL('https://pbs.twimg.com');
+const PULL_THRESHOLD = 80;
 const key = (tag: Tag) => tag.toLowerCase();
 const TAG_COLORS = [
   '#f05a49', '#f58a39', '#92b934', '#31b96b', '#19b9ac', '#4b86f4', '#a568e5', '#e95c9e',
@@ -153,6 +154,10 @@ export function selectionRange(names: readonly string[], anchor: string, target:
   return start < 0 || end < 0 ? null : [Math.min(start, end), Math.max(start, end)];
 }
 
+export function shouldRefreshPull(distance: number, atTop: boolean): boolean {
+  return atTop && distance >= PULL_THRESHOLD;
+}
+
 export function detailTapStep(event: Pick<MouseEvent, 'target' | 'clientX' | 'button'>, detail: HTMLElement, image: HTMLElement): -1 | 1 | null {
   if (event.button !== 0 || (event.target !== detail && event.target !== image)) return null;
   const {left, width} = detail.getBoundingClientRect();
@@ -256,12 +261,12 @@ if (typeof document !== 'undefined') {
   const dropOverlayElement = document.getElementById('drop-overlay');
   const fullElement = document.getElementById('full');
   const backElement = document.getElementById('back');
-  const refreshElement = document.getElementById('refresh');
-  if (!gridElement || !detailElement || !statusElement || !detailStatusElement || !(dropOverlayElement instanceof HTMLDivElement) || !(fullElement instanceof HTMLImageElement) || !(backElement instanceof HTMLAnchorElement) || !(refreshElement instanceof HTMLButtonElement)) {
+  const pullRefreshElement = document.getElementById('pull-refresh');
+  if (!gridElement || !detailElement || !statusElement || !detailStatusElement || !(dropOverlayElement instanceof HTMLDivElement) || !(fullElement instanceof HTMLImageElement) || !(backElement instanceof HTMLAnchorElement) || !(pullRefreshElement instanceof HTMLDivElement)) {
     throw new Error('Missing gallery elements');
   }
   const grid = gridElement, detail = detailElement, status = statusElement, detailStatus = detailStatusElement, full = fullElement, back = backElement;
-  refreshElement.addEventListener('click', () => location.reload());
+  const pullRefresh = pullRefreshElement;
   const element = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
   const dropOverlay = dropOverlayElement;
   const tagToolbar = element<HTMLElement>('tag-toolbar');
@@ -351,7 +356,10 @@ if (typeof document !== 'undefined') {
   }
   function updateSelectionCount() {
     selectedCount.textContent = `${selectedImages.size} selected`;
-    batchActions.hidden = !selectionMode || selectedImages.size === 0 || !detail.hidden;
+    batchActions.hidden = !selectionMode || !detail.hidden;
+    selectModeButton.hidden = selectionMode || !detail.hidden;
+    for (const button of [batchAdd, batchRemove, batchDelete]) button.disabled = !selectedImages.size || batchDeleting;
+    batchClear.disabled = batchDeleting;
   }
   function selectImage(entry: GalleryEntry, shift: boolean) {
     if (!selectionMode || deleting || batchDeleting) return;
@@ -401,8 +409,7 @@ if (typeof document !== 'undefined') {
     const names = [...selectedImages];
     if (!window.confirm(`Delete ${names.length} selected ${names.length === 1 ? 'image' : 'images'} permanently?`)) return;
     batchDeleting = true;
-    const buttons = batchActions.querySelectorAll<HTMLButtonElement>('button');
-    buttons.forEach(button => { button.disabled = true; });
+    updateSelectionCount();
     const removed: string[] = [];
     let failed = 0;
     try {
@@ -426,12 +433,12 @@ if (typeof document !== 'undefined') {
         }
       }
       updateSelectionCount();
-      if (!selectedImages.size) refreshElement.focus({preventScroll: true});
+      if (!selectedImages.size) batchClear.focus({preventScroll: true});
       const deleted = `Deleted ${removed.length} ${removed.length === 1 ? 'image' : 'images'}`;
       status.textContent = failed ? `${deleted}; ${failed} failed and remain selected.` : `${deleted}.`;
     } finally {
       batchDeleting = false;
-      buttons.forEach(button => { button.disabled = false; });
+      updateSelectionCount();
     }
   });
   function option(tag: Tag, active: boolean, action: () => void): HTMLButtonElement {
@@ -686,7 +693,7 @@ if (typeof document !== 'undefined') {
           method: 'PATCH', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({names, [mode]: draftTags}),
         });
         if (!response.ok) throw new Error(`Could not update tags (${response.status})`);
-        sheetFocus = refreshElement;
+        sheetFocus = batchClear;
         tagsSheet.close();
         clearSelection();
         try {
@@ -727,7 +734,7 @@ if (typeof document !== 'undefined') {
       if (!response.ok) throw new Error(`Could not delete image (${response.status})`);
       if (galleryLoaded) {
         syncGallery(posts.filter(post => post.name !== name));
-        previousFocus = grid.querySelector<HTMLAnchorElement>('.gallery-tile:not([hidden]) .gallery-link') ?? refreshElement;
+        previousFocus = grid.querySelector<HTMLAnchorElement>('.gallery-tile:not([hidden]) .gallery-link') ?? selectModeButton;
       }
       if (!detail.hidden && currentName === name) back.click();
     } catch (error) {
@@ -829,7 +836,7 @@ if (typeof document !== 'undefined') {
     grid.inert = true;
     tagToolbar.inert = true;
     detail.hidden = false;
-    batchActions.hidden = true;
+    updateSelectionCount();
     document.documentElement.style.overflow = 'hidden';
     scale = 1;
     panX = panY = 0;
@@ -1028,27 +1035,27 @@ if (typeof document !== 'undefined') {
     return !!types && ['text/uri-list', 'text/html', 'text/plain', 'DownloadURL', 'application/x-moz-file-promise-url'].some(type => types.includes(type));
   };
   const acceptsDrop = (event: DragEvent) => acceptsFiles(event) || acceptsURL(event);
-  const galleryAcceptsUploads = () => location.pathname === '/' && detail.hidden && !tagsSheet.open;
+  const galleryReadyForInput = () => location.pathname === '/' && detail.hidden && !tagsSheet.open;
   let dragDepth = 0;
   const clearDropOverlay = () => { dragDepth = 0; dropOverlay.hidden = true; };
   document.addEventListener('dragenter', event => {
-    if (!galleryAcceptsUploads() || !acceptsDrop(event)) return;
+    if (!galleryReadyForInput() || !acceptsDrop(event)) return;
     event.preventDefault();
     dragDepth++;
     dropOverlay.hidden = false;
   });
   document.addEventListener('dragover', event => {
-    if (!galleryAcceptsUploads()) return;
+    if (!galleryReadyForInput()) return;
     event.preventDefault();
     if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
   });
   document.addEventListener('dragleave', event => {
-    if (!galleryAcceptsUploads() || !acceptsDrop(event)) return;
+    if (!galleryReadyForInput() || !acceptsDrop(event)) return;
     dragDepth = Math.max(0, dragDepth - 1);
     if (!dragDepth) dropOverlay.hidden = true;
   });
   document.addEventListener('drop', event => {
-    if (!galleryAcceptsUploads()) return;
+    if (!galleryReadyForInput()) return;
     event.preventDefault();
     clearDropOverlay();
     const files = Array.from(event.dataTransfer?.files ?? []);
@@ -1061,12 +1068,48 @@ if (typeof document !== 'undefined') {
     }
   });
   document.addEventListener('paste', event => {
-    if (!galleryAcceptsUploads() || (event.target instanceof Element && event.target.closest('input, textarea, [contenteditable]'))) return;
+    if (!galleryReadyForInput() || (event.target instanceof Element && event.target.closest('input, textarea, [contenteditable]'))) return;
     const files = event.clipboardData && clipboardImages(event.clipboardData);
     if (!files?.length) return;
     event.preventDefault();
     queueUploads(files);
   });
+  let pullStartY: number | null = null;
+  let pullDistance = 0;
+  let refreshing = false;
+  const resetPull = () => {
+    pullStartY = null;
+    pullDistance = 0;
+    if (!refreshing) pullRefresh.hidden = true;
+  };
+  document.addEventListener('touchstart', event => {
+    if (event.touches.length !== 1) { resetPull(); return; }
+    if (refreshing || !galleryReadyForInput() || window.scrollY > 0 || (event.target instanceof Element && event.target.closest('button, input, textarea, [contenteditable]'))) return;
+    pullStartY = event.touches[0].clientY;
+    pullDistance = 0;
+  }, {passive: true});
+  document.addEventListener('touchmove', event => {
+    if (pullStartY === null) return;
+    if (event.touches.length !== 1 || window.scrollY > 0) { resetPull(); return; }
+    const distance = event.touches[0].clientY - pullStartY;
+    if (distance < 12) { pullDistance = 0; pullRefresh.hidden = true; return; }
+    event.preventDefault();
+    pullDistance = distance;
+    pullRefresh.hidden = false;
+    pullRefresh.textContent = shouldRefreshPull(distance, true) ? 'Release to refresh' : 'Pull to refresh';
+  }, {passive: false});
+  document.addEventListener('touchend', event => {
+    if (pullStartY === null || event.touches.length) return;
+    const ready = shouldRefreshPull(pullDistance, window.scrollY <= 0) && galleryReadyForInput();
+    resetPull();
+    if (ready && !refreshing) {
+      refreshing = true;
+      pullRefresh.hidden = false;
+      pullRefresh.textContent = 'Refreshing…';
+      location.reload();
+    }
+  });
+  document.addEventListener('touchcancel', resetPull);
   window.addEventListener('blur', clearDropOverlay);
   const match = location.pathname.match(/^\/posts\/([^/]+)$/);
   if (match) openDetail(match[1]);
