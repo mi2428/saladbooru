@@ -148,6 +148,11 @@ export function adjacentName(posts: Pick<Post, 'name' | 'tags'>[], name: string,
   return index < 0 ? undefined : visible[index + step]?.name;
 }
 
+export function selectionRange(names: readonly string[], anchor: string, target: string): [number, number] | null {
+  const start = names.indexOf(anchor), end = names.indexOf(target);
+  return start < 0 || end < 0 ? null : [Math.min(start, end), Math.max(start, end)];
+}
+
 export function detailTapStep(event: Pick<MouseEvent, 'target' | 'clientX' | 'button'>, detail: HTMLElement, image: HTMLElement): -1 | 1 | null {
   if (event.button !== 0 || (event.target !== detail && event.target !== image)) return null;
   const {left, width} = detail.getBoundingClientRect();
@@ -260,6 +265,7 @@ if (typeof document !== 'undefined') {
   const element = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
   const dropOverlay = dropOverlayElement;
   const tagToolbar = element<HTMLElement>('tag-toolbar');
+  const selectModeButton = element<HTMLButtonElement>('select-mode');
   const tagOptions = element<HTMLDivElement>('tag-options');
   const clearFilters = element<HTMLButtonElement>('clear-filters');
   const tagsOpen = element<HTMLButtonElement>('tags-open');
@@ -271,6 +277,13 @@ if (typeof document !== 'undefined') {
   const tagError = element<HTMLParagraphElement>('tag-error');
   const saveButton = element<HTMLButtonElement>('tag-save');
   const tagsTitle = element<HTMLHeadingElement>('tags-title');
+  const tagLabel = tagsSheet.querySelector<HTMLLabelElement>('label[for="tag-name"]')!;
+  const batchActions = element<HTMLDivElement>('batch-actions');
+  const selectedCount = element<HTMLSpanElement>('selected-count');
+  const batchAdd = element<HTMLButtonElement>('batch-add');
+  const batchRemove = element<HTMLButtonElement>('batch-remove');
+  const batchDelete = element<HTMLButtonElement>('batch-delete');
+  const batchClear = element<HTMLButtonElement>('batch-clear');
 
   let galleryLoaded = false;
   let openedFromGallery = false;
@@ -281,12 +294,19 @@ if (typeof document !== 'undefined') {
   let detailTags: Tag[] = [];
   let tagsReady = false;
   let deleting = false;
+  let batchDeleting = false;
   let draftTags: Tag[] = [];
+  let batchMode: 'add' | 'remove' | null = null;
+  let batchNames: string[] = [];
   let saving = false;
   let posts: Post[] = [];
   let suggestionPool: Post[] = [];
   const selectedTags = new Map<string, Tag>();
+  const selectedImages = new Set<string>();
   const entries: GalleryEntry[] = [];
+  const entryByTile = new WeakMap<HTMLDivElement, GalleryEntry>();
+  let selectionMode = false;
+  let rangeAnchor: string | null = null;
   const pendingUploads: {files: File[]; tags: Tag[]}[] = [];
   let uploading = false;
   let preferredHeight = () => 220;
@@ -296,12 +316,15 @@ if (typeof document !== 'undefined') {
     const img = document.createElement('img');
     const dots = document.createElement('div');
     dots.className = 'tag-dots';
+    dots.inert = selectionMode;
     tile.className = 'gallery-tile';
     link.className = 'gallery-link';
     link.href = `/posts/${encodeURIComponent(post.name)}`;
     img.alt = post.name;
     img.loading = 'lazy';
     const entry = {post, tile, link, ratio: imageRatio(post, img), dots, dotLimit: 0};
+    entryByTile.set(tile, entry);
+    renderSelection(entry);
     img.addEventListener('load', () => {
       const ratio = imageRatio(post, img);
       if (Math.abs(ratio - entry.ratio) > 0.005) { entry.ratio = ratio; scheduleLayout(); }
@@ -313,6 +336,104 @@ if (typeof document !== 'undefined') {
     showImage(img, {url: tileURL, original: post.url, format: post.format}, () => { status.textContent = 'Some images cannot be displayed'; });
     return entry;
   }
+  function renderSelection(entry: GalleryEntry) {
+    const active = selectedImages.has(entry.post.name);
+    entry.tile.classList.toggle('is-selected', active);
+    const description = `${entry.post.name}${entry.post.tags.length ? ', tags: ' + entry.post.tags.join(', ') : ''}`;
+    entry.link.setAttribute('aria-label', selectionMode ? `${active ? 'Deselect' : 'Select'} image ${description}` : description);
+    if (selectionMode) {
+      entry.link.setAttribute('role', 'button');
+      entry.link.setAttribute('aria-pressed', String(active));
+    } else {
+      entry.link.removeAttribute('role');
+      entry.link.removeAttribute('aria-pressed');
+    }
+  }
+  function updateSelectionCount() {
+    selectedCount.textContent = `${selectedImages.size} selected`;
+    batchActions.hidden = !selectionMode || selectedImages.size === 0 || !detail.hidden;
+  }
+  function selectImage(entry: GalleryEntry, shift: boolean) {
+    if (!selectionMode || deleting || batchDeleting) return;
+    const name = entry.post.name;
+    if (shift && rangeAnchor) {
+      const visible = entries.filter(item => !item.tile.hidden);
+      const range = selectionRange(visible.map(item => item.post.name), rangeAnchor, name);
+      if (range) {
+        for (const item of visible.slice(range[0], range[1] + 1)) {
+          selectedImages.add(item.post.name);
+          renderSelection(item);
+        }
+        updateSelectionCount();
+        return;
+      }
+    }
+    if (selectedImages.has(name)) selectedImages.delete(name);
+    else selectedImages.add(name);
+    rangeAnchor = name;
+    renderSelection(entry);
+    updateSelectionCount();
+  }
+  function clearSelection() {
+    rangeAnchor = null;
+    if (!selectedImages.size) return;
+    for (const entry of entries) if (selectedImages.has(entry.post.name)) {
+      selectedImages.delete(entry.post.name);
+      renderSelection(entry);
+    }
+    selectedImages.clear();
+    updateSelectionCount();
+  }
+  function setSelectionMode(active: boolean) {
+    if (batchDeleting || tagsSheet.open) return;
+    selectionMode = active;
+    selectModeButton.setAttribute('aria-pressed', String(selectionMode));
+    selectModeButton.setAttribute('aria-label', selectionMode ? 'Done selecting' : 'Select images');
+    selectModeButton.title = selectionMode ? 'Done selecting' : 'Select images';
+    if (!selectionMode) clearSelection();
+    for (const entry of entries) { entry.dots.inert = selectionMode; renderSelection(entry); }
+    updateSelectionCount();
+  }
+  selectModeButton.addEventListener('click', () => setSelectionMode(!selectionMode));
+  batchClear.addEventListener('click', () => setSelectionMode(false));
+  batchDelete.addEventListener('click', async () => {
+    if (batchDeleting || !detail.hidden || !selectedImages.size) return;
+    const names = [...selectedImages];
+    if (!window.confirm(`Delete ${names.length} selected ${names.length === 1 ? 'image' : 'images'} permanently?`)) return;
+    batchDeleting = true;
+    const buttons = batchActions.querySelectorAll<HTMLButtonElement>('button');
+    buttons.forEach(button => { button.disabled = true; });
+    const removed: string[] = [];
+    let failed = 0;
+    try {
+      for (const name of names) {
+        try {
+          const response = await fetch(`/api/posts/${encodeURIComponent(name)}`, {method: 'DELETE'});
+          if (!response.ok) throw new Error(`Deletion failed (${response.status})`);
+          removed.push(name);
+        } catch { failed++; }
+      }
+      for (const name of removed) selectedImages.delete(name);
+      if (removed.length) {
+        try {
+          syncGallery(await fetchPosts());
+        } catch {
+          const completed = new Set(removed);
+          for (const entry of entries) if (completed.has(entry.post.name)) renderSelection(entry);
+          updateSelectionCount();
+          status.textContent = `Deleted ${removed.length} images, but could not refresh the gallery. ${failed} failed.`;
+          return;
+        }
+      }
+      updateSelectionCount();
+      if (!selectedImages.size) refreshElement.focus({preventScroll: true});
+      const deleted = `Deleted ${removed.length} ${removed.length === 1 ? 'image' : 'images'}`;
+      status.textContent = failed ? `${deleted}; ${failed} failed and remain selected.` : `${deleted}.`;
+    } finally {
+      batchDeleting = false;
+      buttons.forEach(button => { button.disabled = false; });
+    }
+  });
   function option(tag: Tag, active: boolean, action: () => void): HTMLButtonElement {
     const button = document.createElement('button');
     button.type = 'button';
@@ -345,10 +466,10 @@ if (typeof document !== 'undefined') {
       dot.className = 'dot';
       dot.style.setProperty('--tag-color', tagColor(tag));
       button.append(dot);
-      button.addEventListener('click', () => toggleFilter(tag));
+      button.addEventListener('click', () => { if (!selectionMode) toggleFilter(tag); });
       entry.dots.append(button);
     }
-    entry.link.setAttribute('aria-label', `${entry.post.name}${entry.post.tags.length ? ', tags: ' + entry.post.tags.join(', ') : ''}`);
+    renderSelection(entry);
   }
 
   function layout() {
@@ -402,8 +523,9 @@ if (typeof document !== 'undefined') {
       grid.append(added.tile);
       return added;
     });
-    for (const entry of existing.values()) entry.tile.remove();
+    for (const entry of existing.values()) { entry.tile.remove(); selectedImages.delete(entry.post.name); }
     entries.splice(0, entries.length, ...updated);
+    updateSelectionCount();
     posts = items;
     const scrollLeft = tagOptions.scrollLeft;
     renderTagBar();
@@ -411,6 +533,8 @@ if (typeof document !== 'undefined') {
     layout();
   }
   function toggleFilter(tag: Tag) {
+    if (batchDeleting) return;
+    clearSelection();
     const id = key(tag);
     if (selectedTags.has(id)) selectedTags.delete(id);
     else selectedTags.set(id, tag);
@@ -418,6 +542,8 @@ if (typeof document !== 'undefined') {
     layout();
   }
   clearFilters.addEventListener('click', () => {
+    if (batchDeleting) return;
+    clearSelection();
     selectedTags.clear();
     renderTagBar();
     layout();
@@ -425,7 +551,7 @@ if (typeof document !== 'undefined') {
   });
   function validateDraft(tag: Tag): string {
     if (!tag || tag.trim() !== tag || Array.from(tag).length > 80 || /[\p{Cc}\p{Cf}]/u.test(tag)) return 'Name must be 1–80 characters without outer spaces';
-    if (draftTags.some(current => key(current) === key(tag))) return 'This tag is already added';
+    if (draftTags.some(current => key(current) === key(tag))) return batchMode === 'remove' ? 'This tag is already selected' : 'This tag is already added';
     return '';
   }
   function renderSuggestions() {
@@ -447,8 +573,14 @@ if (typeof document !== 'undefined') {
       label.textContent = tag;
       const remove = document.createElement('button');
       remove.type = 'button';
-      remove.textContent = '×';
       remove.setAttribute('aria-label', `Remove ${tag}`);
+      const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      icon.setAttribute('viewBox', '0 0 24 24');
+      icon.setAttribute('aria-hidden', 'true');
+      const cross = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      cross.setAttribute('d', 'm5 5 14 14M19 5 5 19');
+      icon.append(cross);
+      remove.append(icon);
       remove.addEventListener('click', () => { draftTags = draftTags.filter(current => current !== tag); renderChips(); renderSuggestions(); });
       chip.append(label, remove);
       chips.append(chip);
@@ -474,8 +606,41 @@ if (typeof document !== 'undefined') {
     if (!saving && clickedOutsideDialog(event, tagsSheet)) tagsSheet.close();
   });
   tagsSheet.addEventListener('cancel', event => { if (saving) event.preventDefault(); });
-  tagsSheet.addEventListener('close', () => sheetFocus?.focus({preventScroll: true}));
+  tagsSheet.addEventListener('close', () => {
+    sheetFocus?.focus({preventScroll: true});
+    batchMode = null;
+    batchNames = [];
+  });
+  function openBatchTags(mode: 'add' | 'remove', trigger: HTMLButtonElement) {
+    if (batchDeleting || !selectedImages.size) return;
+    batchMode = mode;
+    batchNames = [...selectedImages];
+    sheetFocus = trigger;
+    draftTags = [];
+    const images = `${batchNames.length} ${batchNames.length === 1 ? 'image' : 'images'}`;
+    tagsTitle.textContent = mode === 'add' ? `Add tags to ${images}` : `Remove tags from ${images}`;
+    tagLabel.textContent = mode === 'add' ? 'Add tag' : 'Remove tag';
+    nameInput.placeholder = mode === 'add' ? 'Press Enter to add' : 'Press Enter to remove';
+    saveButton.textContent = mode === 'add' ? 'Add tags' : 'Remove tags';
+    saveButton.disabled = false;
+    tagError.textContent = '';
+    nameInput.value = '';
+    suggestionPool = mode === 'remove' ? posts.filter(post => selectedImages.has(post.name)) : posts;
+    renderChips();
+    renderSuggestions();
+    tagsSheet.showModal();
+    tagsSheet.scrollTop = 0;
+    tagsTitle.focus({preventScroll: true});
+  }
+  batchAdd.addEventListener('click', () => openBatchTags('add', batchAdd));
+  batchRemove.addEventListener('click', () => openBatchTags('remove', batchRemove));
   tagsOpen.addEventListener('click', () => {
+    batchMode = null;
+    batchNames = [];
+    tagsTitle.textContent = 'Tags';
+    tagLabel.textContent = 'Add tag';
+    nameInput.placeholder = 'Press Enter to add';
+    saveButton.textContent = 'Save';
     sheetFocus = tagsOpen;
     draftTags = detailTags.slice();
     saveButton.disabled = !galleryLoaded;
@@ -509,10 +674,29 @@ if (typeof document !== 'undefined') {
       addTag(nameInput.value);
       if (tagError.textContent) return;
     }
+    if (batchMode && !draftTags.length) { tagError.textContent = 'Choose at least one tag'; return; }
     saving = true;
     tagError.textContent = '';
     tagsSheet.querySelectorAll<HTMLInputElement | HTMLButtonElement>('input, button').forEach(control => { control.disabled = true; });
     try {
+      if (batchMode) {
+        const mode = batchMode;
+        const names = batchNames.slice();
+        const response = await fetch('/api/batch/tags', {
+          method: 'PATCH', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({names, [mode]: draftTags}),
+        });
+        if (!response.ok) throw new Error(`Could not update tags (${response.status})`);
+        sheetFocus = refreshElement;
+        tagsSheet.close();
+        clearSelection();
+        try {
+          syncGallery(await fetchPosts());
+          status.textContent = `${mode === 'add' ? 'Added' : 'Removed'} tags on ${names.length} images.`;
+        } catch {
+          status.textContent = `Updated ${names.length} images, but could not refresh the gallery.`;
+        }
+        return;
+      }
       const response = await fetch(`/api/posts/${encodeURIComponent(currentName)}/tags`, {
         method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({tags: draftTags}),
       });
@@ -645,6 +829,7 @@ if (typeof document !== 'undefined') {
     grid.inert = true;
     tagToolbar.inert = true;
     detail.hidden = false;
+    batchActions.hidden = true;
     document.documentElement.style.overflow = 'hidden';
     scale = 1;
     panX = panY = 0;
@@ -688,6 +873,7 @@ if (typeof document !== 'undefined') {
   function closeDetail() {
     if (detail.hidden) return;
     detail.hidden = true;
+    updateSelectionCount();
     grid.inert = false;
     tagToolbar.inert = false;
     document.documentElement.style.overflow = '';
@@ -809,13 +995,32 @@ if (typeof document !== 'undefined') {
     fetchPosts().then(syncGallery).catch(error => { status.textContent = error instanceof Error ? error.message : String(error); });
   }
   grid.addEventListener('click', event => {
-    const link = event.target instanceof Element ? event.target.closest('a') : null;
+    if (batchDeleting) return;
+    const target = event.target instanceof Element ? event.target : null;
+    if (selectionMode) {
+      const tile = target?.closest<HTMLDivElement>('.gallery-tile');
+      if (tile && event.button === 0) {
+        event.preventDefault();
+        const entry = entryByTile.get(tile);
+        if (entry) selectImage(entry, event.shiftKey);
+      }
+      return;
+    }
+    const link = target?.closest('a');
     if (event.target instanceof Element && event.target.closest('button')) return;
     if (!(link instanceof HTMLAnchorElement) || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
     previousFocus = link;
     history.pushState(null, '', link.href);
     openDetail(link.pathname.slice('/posts/'.length));
+  });
+  grid.addEventListener('keydown', event => {
+    if (!selectionMode || event.key !== ' ' || !(event.target instanceof HTMLAnchorElement)) return;
+    const tile = event.target.closest<HTMLDivElement>('.gallery-tile');
+    if (!tile) return;
+    event.preventDefault();
+    const entry = entryByTile.get(tile);
+    if (entry) selectImage(entry, event.shiftKey);
   });
   const acceptsFiles = (event: DragEvent) => event.dataTransfer?.types.includes('Files') ?? false;
   const acceptsURL = (event: DragEvent) => {

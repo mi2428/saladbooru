@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {layoutRows, installZoom, imageRatio, showImage, uploadFiles, clipboardImages, droppedImageURL, fetchDroppedImage, shouldSubmitTagOnEnter, clickedOutsideDialog, tagColor, tagsByUse, filterTags, adjacentName, detailTapStep} from '../src/app.ts';
+import {layoutRows, installZoom, imageRatio, showImage, uploadFiles, clipboardImages, droppedImageURL, fetchDroppedImage, shouldSubmitTagOnEnter, clickedOutsideDialog, tagColor, tagsByUse, filterTags, adjacentName, selectionRange, detailTapStep} from '../src/app.ts';
 
 test('only AVIF falls back to preview, other formats retry once', () => {
   for (const name of ['x.avif', 'x.AVIF']) {
@@ -213,6 +213,14 @@ test('arrow navigation follows gallery order and active filters without wrapping
   assert.equal(adjacentName(posts, 'first.png', -1, []), undefined);
   assert.equal(adjacentName(posts, 'third.png', 1, ['red']), undefined);
   assert.equal(adjacentName(posts, 'second.png', 1, ['red']), undefined);
+});
+
+test('Shift selects an inclusive range in either direction, never across missing anchors', () => {
+  const names = ['first', 'second', 'third', 'fourth'];
+  assert.deepEqual(selectionRange(names, 'first', 'third'), [0, 2]);
+  assert.deepEqual(selectionRange(names, 'fourth', 'second'), [1, 3]);
+  assert.deepEqual(selectionRange(names, 'third', 'third'), [2, 2]);
+  assert.equal(selectionRange(names, 'missing', 'second'), null);
 });
 
 test('viewer taps and mouse clicks use screen halves without intercepting viewer controls', () => {
