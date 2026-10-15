@@ -27,6 +27,15 @@ func putTags(t *testing.T, h http.Handler, name, body string) *httptest.Response
 	return w
 }
 
+func patchBatchTags(t *testing.T, h http.Handler, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	r := httptest.NewRequest("PATCH", "/api/batch/tags", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	return w
+}
+
 func removePost(t *testing.T, h http.Handler, name string) *httptest.ResponseRecorder {
 	t.Helper()
 	w := httptest.NewRecorder()
@@ -154,6 +163,90 @@ func TestTagsAPIAndPersistence(t *testing.T) {
 	}
 	if w := get(t, h, "/api/posts"); w.Code != 200 || strings.Contains(w.Body.String(), "作品 ひとつ") {
 		t.Fatalf("tag removal not reflected: %d", w.Code)
+	}
+}
+
+func TestBatchTagsAddAndRemove(t *testing.T) {
+	s, images, h := setup(t)
+	raw := pngImage(t)
+	for _, name := range []string{"one.png", "two.png", "untouched.png"} {
+		if err := os.WriteFile(filepath.Join(images, name), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if w := putTags(t, h, "one.png", `{"tags":["Blue","Keep"]}`); w.Code != 200 {
+		t.Fatalf("first tags: %d", w.Code)
+	}
+	if w := putTags(t, h, "two.png", `{"tags":["Red"]}`); w.Code != 200 {
+		t.Fatalf("second tags: %d", w.Code)
+	}
+	if w := patchBatchTags(t, h, `{"names":["one.png","two.png"],"add":["BLUE","New"]}`); w.Code != 204 {
+		t.Fatalf("batch add: %d %s", w.Code, w.Body.String())
+	}
+	stored, err := readTags(s.data)
+	if err != nil || !slices.Equal(stored["one.png"], []string{"Blue", "Keep", "New"}) || !slices.Equal(stored["two.png"], []string{"Red", "BLUE", "New"}) {
+		t.Fatalf("batch add changed existing tags: %v %v", stored, err)
+	}
+	if w := patchBatchTags(t, h, `{"names":["one.png","two.png"],"remove":["blue","RED"]}`); w.Code != 204 {
+		t.Fatalf("batch remove: %d %s", w.Code, w.Body.String())
+	}
+	stored, err = readTags(s.data)
+	if err != nil || !slices.Equal(stored["one.png"], []string{"Keep", "New"}) || !slices.Equal(stored["two.png"], []string{"New"}) || len(stored["untouched.png"]) != 0 {
+		t.Fatalf("batch remove: %v %v", stored, err)
+	}
+	for _, name := range []string{"one.png", "two.png", "untouched.png"} {
+		if file, err := os.ReadFile(filepath.Join(images, name)); err != nil || !bytes.Equal(file, raw) {
+			t.Fatalf("batch tags changed image %s: %v", name, err)
+		}
+	}
+	restarted, err := newServer(filepath.Dir(images), defaultThumbnailCacheLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restarted.images.Close()
+	defer restarted.data.Close()
+	if w := get(t, restarted.routes(), "/api/posts/two.png/tags"); w.Code != 200 || !strings.Contains(w.Body.String(), `"New"`) {
+		t.Fatalf("batch tags not persisted: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestBatchTagsRejectsUnsafeOrPartialChanges(t *testing.T) {
+	s, images, h := setup(t)
+	for _, name := range []string{"one.png", "two.png"} {
+		if err := os.WriteFile(filepath.Join(images, name), pngImage(t), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if w := putTags(t, h, "one.png", `{"tags":["Keep"]}`); w.Code != 200 {
+		t.Fatalf("initial tags: %d", w.Code)
+	}
+	for _, body := range []string{
+		`{}`, `{"names":[],"add":["New"]}`, `{"names":["one.png","one.png"],"add":["New"]}`,
+		`{"names":["../one.png"],"remove":["Keep"]}`, `{"names":["one.png"],"add":["New"],"remove":["Keep"]}`,
+		`{"names":["one.png"],"add":[]}`, `{"names":["one.png"],"add":["New","new"]}`,
+		`{"names":["one.png"],"add":["New"],"extra":true}`, `{"names":["one.png"],"names":["two.png"],"add":["New"]}`,
+		`{"names":["one.png"],"add":["New"]} true`,
+	} {
+		if w := patchBatchTags(t, h, body); w.Code != 400 {
+			t.Fatalf("invalid batch accepted (%d): %s", w.Code, body)
+		}
+	}
+	if w := patchBatchTags(t, h, `{"names":["one.png","missing.png"],"add":["New"]}`); w.Code != 404 {
+		t.Fatalf("partial batch changed state: %d", w.Code)
+	}
+	stored, err := readTags(s.data)
+	if err != nil || !slices.Equal(stored["one.png"], []string{"Keep"}) || len(stored["two.png"]) != 0 {
+		t.Fatalf("invalid batch changed tags: %v %v", stored, err)
+	}
+	if err := os.Symlink("one.png", filepath.Join(images, "alias.png")); err != nil {
+		t.Fatal(err)
+	}
+	if w := patchBatchTags(t, h, `{"names":["one.png","alias.png"],"remove":["Keep"]}`); w.Code != 404 {
+		t.Fatalf("symlink accepted in batch: %d", w.Code)
+	}
+	stored, err = readTags(s.data)
+	if err != nil || !slices.Equal(stored["one.png"], []string{"Keep"}) {
+		t.Fatalf("unsafe batch changed tags: %v %v", stored, err)
 	}
 }
 

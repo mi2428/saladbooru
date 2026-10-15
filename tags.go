@@ -10,6 +10,7 @@ import (
 	"mime"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -259,6 +260,131 @@ func (s *server) putTags(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(struct {
 		Tags []string `json:"tags"`
 	}{tags})
+}
+
+func decodeBatchTags(raw []byte) ([]string, []string, bool, error) {
+	if !utf8.Valid(raw) {
+		return nil, nil, false, errors.New("Invalid UTF-8")
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if start, err := dec.Token(); err != nil || start != json.Delim('{') {
+		return nil, nil, false, errors.New("Invalid batch request")
+	}
+	fields := map[string]json.RawMessage{}
+	for dec.More() {
+		field, err := dec.Token()
+		name, ok := field.(string)
+		if err != nil || !ok || (name != "names" && name != "add" && name != "remove") || fields[name] != nil {
+			return nil, nil, false, errors.New("Unexpected or duplicate batch field")
+		}
+		var value json.RawMessage
+		if err := dec.Decode(&value); err != nil {
+			return nil, nil, false, err
+		}
+		fields[name] = value
+	}
+	if end, err := dec.Token(); err != nil || end != json.Delim('}') {
+		return nil, nil, false, errors.New("Invalid batch request")
+	}
+	if err := dec.Decode(new(any)); err != io.EOF {
+		return nil, nil, false, errors.New("Unexpected JSON after batch request")
+	}
+	remove := fields["remove"] != nil
+	if remove == (fields["add"] != nil) {
+		return nil, nil, false, errors.New("Specify either add or remove")
+	}
+	var names []string
+	if err := json.Unmarshal(fields["names"], &names); err != nil || len(names) == 0 {
+		return nil, nil, false, errors.New("Select at least one image")
+	}
+	seen := map[string]bool{}
+	for _, name := range names {
+		if !validName(name) || seen[name] {
+			return nil, nil, false, errors.New("Invalid or duplicate image name")
+		}
+		seen[name] = true
+	}
+	operation := "add"
+	if remove {
+		operation = "remove"
+	}
+	tags, err := decodeTagList(fields[operation])
+	if err != nil || len(tags) == 0 {
+		return nil, nil, false, errors.New("Select at least one valid tag")
+	}
+	return names, tags, remove, nil
+}
+
+func (s *server) batchTags(w http.ResponseWriter, r *http.Request) {
+	contentType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || contentType != "application/json" {
+		http.Error(w, "Expected application/json", http.StatusUnsupportedMediaType)
+		return
+	}
+	raw, err := io.ReadAll(io.LimitReader(r.Body, 16<<20+1))
+	if err != nil || len(raw) > 16<<20 {
+		http.Error(w, "Batch request too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+	names, tags, remove, err := decodeBatchTags(raw)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	s.tagsMu.Lock()
+	defer s.tagsMu.Unlock()
+	previous, lock, err := s.tagsForWrite()
+	if err != nil {
+		http.Error(w, "Tag storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	defer lock.Close()
+	for _, name := range names {
+		f, _, _, err := s.openImage(name)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		f.Close()
+	}
+	change := map[string]bool{}
+	for _, tag := range tags {
+		change[strings.ToLower(tag)] = true
+	}
+	next := maps.Clone(previous)
+	changed := false
+	for _, name := range names {
+		updated := make([]string, 0, len(previous[name])+len(tags))
+		for _, tag := range previous[name] {
+			if !remove || !change[strings.ToLower(tag)] {
+				updated = append(updated, tag)
+			}
+		}
+		if !remove {
+			present := map[string]bool{}
+			for _, tag := range updated {
+				present[strings.ToLower(tag)] = true
+			}
+			for _, tag := range tags {
+				if !present[strings.ToLower(tag)] {
+					updated = append(updated, tag)
+				}
+			}
+		}
+		changed = changed || !slices.Equal(previous[name], updated)
+		if len(updated) == 0 {
+			delete(next, name)
+		} else {
+			next[name] = updated
+		}
+	}
+	if changed {
+		if err := s.saveTags(next); err != nil {
+			http.Error(w, "Tag storage unavailable", http.StatusServiceUnavailable)
+			return
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *server) deletePost(w http.ResponseWriter, r *http.Request) {

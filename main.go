@@ -238,6 +238,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("DELETE /api/posts/{name}", s.deletePost)
 	mux.HandleFunc("GET /api/posts/{name}/tags", s.getTags)
 	mux.HandleFunc("PUT /api/posts/{name}/tags", s.putTags)
+	mux.HandleFunc("PATCH /api/batch/tags", s.batchTags)
 	mux.HandleFunc("GET /images/{name}", s.media)
 	mux.HandleFunc("GET /thumbs/{name}", s.thumbnail)
 	mux.HandleFunc("GET /preview/{name}", s.preview)
