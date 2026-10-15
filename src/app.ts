@@ -417,7 +417,7 @@ if (typeof document !== 'undefined') {
   function renderSuggestions() {
     suggestions.replaceChildren();
     const query = nameInput.value.trim().toLowerCase();
-    const matches = tagsByUse(suggestionPool).filter(tag => !draftTags.some(current => key(tag) === key(current)) && (!query || key(tag).includes(query))).slice(0, query ? 8 : 6);
+    const matches = tagsByUse(suggestionPool).filter(tag => !draftTags.some(current => key(tag) === key(current)) && (!query || key(tag).includes(query))).slice(0, 30);
     suggestions.hidden = matches.length === 0;
     for (const tag of matches) {
       suggestions.append(option(tag, false, () => addTag(tag)));
