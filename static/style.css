@@ -1,6 +1,6 @@
 :root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; scrollbar-gutter: stable; overscroll-behavior-y: contain; }
 body { margin: 0; min-height: 100vh; background: #fff; color: #182331; }
-#tag-toolbar { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 8px; box-sizing: border-box; min-height: 54px; padding: 5px 8px; background: rgb(255 255 255 / 30%); }
+#tag-toolbar { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 8px; box-sizing: border-box; min-height: 46px; padding: 1px 0; background: rgb(255 255 255 / 30%); }
 #tag-bar { display: flex; flex: 1; align-items: center; gap: 8px; min-width: 0; }
 #tag-options { display: flex; flex: 1; align-items: center; gap: 6px; min-width: 0; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; padding: 2px 0; }
 #tag-options::-webkit-scrollbar { display: none; }
@@ -22,6 +22,7 @@ body { margin: 0; min-height: 100vh; background: #fff; color: #182331; }
 .tag-dot-button { display: grid; flex: none; place-items: center; width: 13px; height: 24px; padding: 0; border: 0; border-radius: 50%; background: transparent; cursor: pointer; pointer-events: auto; }
 .dot { display: block; width: 10px; height: 10px; border: 1px solid #fff; border-radius: 50%; background: var(--tag-color, #74849a); }
 #detail { position: fixed; inset: 0; z-index: 6; display: grid; place-items: center; overflow: hidden; background: #121820; touch-action: none; overscroll-behavior: contain; }
+#detail:focus-visible { box-shadow: none; }
 #full { max-width: 100%; max-height: 100dvh; object-fit: contain; user-select: none; cursor: grab; }
 #full:active { cursor: grabbing; }
 #nsfw-reveal { position: absolute; top: 50%; left: 50%; z-index: 1; transform: translate(-50%, -50%); min-height: 44px; padding: 0 16px; border: 0; border-radius: 22px; background: #29384bf2; color: #fff; font: inherit; cursor: pointer; }

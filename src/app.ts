@@ -943,7 +943,7 @@ if (typeof document !== 'undefined') {
     }).catch(error => {
       if (currentName === openedName && !detail.hidden) detailStatus.textContent = `Could not verify image tags: ${error instanceof Error ? error.message : String(error)}`;
     });
-    back.focus({preventScroll: true});
+    detail.focus({preventScroll: true});
   }
   async function moveDetail(step: -1 | 1) {
     try {
