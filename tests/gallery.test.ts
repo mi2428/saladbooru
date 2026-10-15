@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {layoutRows, installZoom, imageRatio, showImage, uploadFiles, droppedImageURL, fetchDroppedImage, shouldSubmitTagOnEnter, clickedOutsideDialog, tagColor, tagsByUse, adjacentName, detailTapStep} from '../src/app.ts';
+import {layoutRows, installZoom, imageRatio, showImage, uploadFiles, droppedImageURL, fetchDroppedImage, shouldSubmitTagOnEnter, clickedOutsideDialog, tagColor, tagsByUse, filterTags, adjacentName, detailTapStep} from '../src/app.ts';
 
 test('native image first, preview once after decode failure, then show error', () => {
   for (const name of ['x.avif', 'x.AVIF', 'x.png', 'x.jpg']) {
@@ -115,6 +115,15 @@ test('tag popularity counts images, merges case variants and sorts ties by name'
   ];
   assert.deepEqual(tagsByUse(posts), ['blue', 'Aiko', 'Zulu']);
   assert.deepEqual(tagsByUse([]), []);
+});
+
+test('active filters come first without changing popularity order or losing deleted tags', () => {
+  const posts = [{tags: ['Blue', 'red']}, {tags: ['BLUE', 'Green']}, {tags: ['green', 'Blue']}];
+  const selected = new Map([['red', 'RED'], ['green', 'Green'], ['gone', 'Gone']]);
+  assert.deepEqual(filterTags(posts, selected), ['Green', 'red', 'Gone', 'Blue']);
+  selected.delete('green');
+  assert.deepEqual(filterTags(posts, selected), ['red', 'Gone', 'Blue', 'Green']);
+  assert.deepEqual(filterTags(posts, new Map()), tagsByUse(posts));
 });
 
 test('arrow navigation follows gallery order and active filters without wrapping', () => {

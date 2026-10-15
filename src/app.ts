@@ -126,6 +126,12 @@ export function tagsByUse(posts: Pick<Post, 'tags'>[]): Tag[] {
   return [...counts.values()].sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag)).map(entry => entry.tag);
 }
 
+export function filterTags(posts: Pick<Post, 'tags'>[], selected: ReadonlyMap<string, Tag>): Tag[] {
+  const tags = tagsByUse(posts);
+  for (const [id, tag] of selected) if (!tags.some(other => key(other) === id)) tags.push(tag);
+  return tags.sort((a, b) => Number(selected.has(key(b))) - Number(selected.has(key(a))));
+}
+
 export function adjacentName(posts: Pick<Post, 'name' | 'tags'>[], name: string, step: -1 | 1, filters: string[]): string | undefined {
   const visible = posts.filter(post => filters.every(id => post.tags.some(tag => key(tag) === id)));
   const index = visible.findIndex(post => post.name === name);
@@ -337,10 +343,8 @@ if (typeof document !== 'undefined') {
 
   function renderTagBar(focus?: string) {
     tagOptions.replaceChildren();
-    const tags = tagsByUse(posts);
-    for (const tag of selected.values()) if (!tags.some(other => key(other) === key(tag))) tags.push(tag);
     let focused: HTMLButtonElement | undefined;
-    for (const tag of tags) {
+    for (const tag of filterTags(posts, selected)) {
       const id = key(tag);
       const button = option(tag, selected.has(id), () => toggleFilter(tag));
       button.classList.add('tag-filter');

@@ -43,7 +43,7 @@ body { margin: 0; min-height: 100vh; background: #fff; color: #182331; }
 .tag-options { max-height: 18dvh; margin-top: 8px; overflow-y: auto; overscroll-behavior: contain; }
 .tag-option, .tag-chip { display: inline-flex; align-items: center; min-height: 24px; border-radius: 12px; background: #f2f4f5; background: color-mix(in srgb, var(--tag-color) 45%, white); color: #182331; font-size: 12px; }
 .tag-option { justify-content: flex-start; min-width: 0; max-width: 100%; overflow: hidden; padding: 0 7px; border: 0; font-family: inherit; text-align: left; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
-.tag-option.chosen { background: #e3e9ec; background: color-mix(in srgb, var(--tag-color) 65%, white); }
+.tag-option.chosen { background: #e3e9ec; background: color-mix(in srgb, var(--tag-color) 65%, white); font-weight: 700; box-shadow: inset 0 0 0 2px var(--tag-color); }
 .tag-option:focus-visible { box-shadow: inset 0 0 0 2px #526279a6; }
 .tag-chip { padding-left: 7px; overflow-wrap: anywhere; }
 .tag-chip button { min-width: 24px; min-height: 24px; padding: 0 4px; border: 0; background: transparent; font: inherit; font-size: 1rem; cursor: pointer; }
