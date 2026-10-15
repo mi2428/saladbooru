@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"image"
@@ -613,6 +614,24 @@ func TestThumbnailCacheLimit(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestCanceledThumbnailDoesNotFillCache(t *testing.T) {
+	s, images, h := setup(t)
+	if err := os.WriteFile(filepath.Join(images, "canceled.png"), pngImage(t), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	request := httptest.NewRequest("GET", "/thumbs/canceled.png", nil).WithContext(ctx)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, request)
+	if w.Body.Len() != 0 || s.thumbBytes != 0 || len(s.thumbCache) != 0 {
+		t.Fatal("canceled request generated a thumbnail")
+	}
+	if response := get(t, h, "/thumbs/canceled.png"); response.Code != 200 {
+		t.Fatalf("live request failed after cancellation: %d", response.Code)
 	}
 }
 

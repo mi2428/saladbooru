@@ -1,11 +1,15 @@
 type Tag = string;
 type Post = {name: string; url: string; format: string; width: number; height: number; tags: Tag[]};
+type TileRect = {x: number; y: number; width: number; height: number};
+type ViewAnchor = {element: Element; fraction: number; y: number};
 type GalleryEntry = {
   post: Post;
-  tile: HTMLDivElement;
-  link: HTMLAnchorElement;
+  tile?: HTMLDivElement;
+  link?: HTMLAnchorElement;
   ratio: number;
-  dots: HTMLDivElement;
+  dots?: HTMLDivElement;
+  rect?: TileRect;
+  applied?: TileRect;
   dotLimit: number;
   renderedTags?: Tag[];
   renderedFilter?: string;
@@ -22,7 +26,7 @@ const TAG_COLORS = [
 ];
 
 export function layoutRows(ratios: number[], width: number, targetHeight: number) {
-  const positions: {x: number; y: number; width: number; height: number}[] = [];
+  const positions: TileRect[] = [];
   const gap = 2;
   let y = 0;
   for (let start = 0; start < ratios.length;) {
@@ -54,7 +58,19 @@ export function layoutRows(ratios: number[], width: number, targetHeight: number
   return {positions, height: positions.length ? y - gap : 0};
 }
 
-export function installZoom(relayout: () => void): () => number {
+export function windowRange(positions: readonly TileRect[], top: number, bottom: number): [number, number] {
+  let low = 0, high = positions.length;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (positions[middle].y + positions[middle].height < top) low = middle + 1;
+    else high = middle;
+  }
+  const start = low;
+  while (low < positions.length && positions[low].y <= bottom) low++;
+  return [start, low];
+}
+
+export function installZoom(relayout: (anchor?: ViewAnchor) => void): () => number {
   let pinch: {distance: number; size: number} | null = null;
   let gestureSize: number | null = null;
   let preferredHeight = 220;
@@ -65,16 +81,11 @@ export function installZoom(relayout: () => void): () => number {
     const rect = element.getBoundingClientRect();
     return {element, fraction: (y - rect.top) / rect.height, y};
   };
-  const setSize = (value: number, anchor: ReturnType<typeof anchorAt>) => {
+  const setSize = (value: number, anchor: ViewAnchor | null) => {
     const size = Math.max(100, Math.min(500, value));
     if (!Number.isFinite(size) || size === preferredHeight) return;
     preferredHeight = size;
-    relayout();
-    if (anchor) {
-      const rect = anchor.element.getBoundingClientRect();
-      const maxScroll = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
-      window.scrollTo(0, Math.max(0, Math.min(maxScroll, window.scrollY + rect.top + rect.height * anchor.fraction - anchor.y)));
-    }
+    relayout(anchor ?? undefined);
   };
   window.addEventListener('wheel', event => {
     if (galleryBlocked()) return;
@@ -332,6 +343,9 @@ if (typeof document !== 'undefined') {
   const selectedTags = new Map<string, Tag>();
   const selectedImages = new Set<string>();
   const entries: GalleryEntry[] = [];
+  const mounted = new Map<string, GalleryEntry>();
+  let visibleEntries: GalleryEntry[] = [];
+  let visibleRects: TileRect[] = [];
   const entryByTile = new WeakMap<HTMLDivElement, GalleryEntry>();
   let revealAnchor: {name: string; top: number; scroll: number} | null = null;
   let selectionMode = false;
@@ -340,6 +354,9 @@ if (typeof document !== 'undefined') {
   let uploading = false;
   let preferredHeight = () => 220;
   function createEntry(post: Post): GalleryEntry {
+    return {post, ratio: post.width / post.height, dotLimit: 0};
+  }
+  function mountEntry(entry: GalleryEntry, before: Node | null): HTMLDivElement {
     const tile = document.createElement('div');
     const link = document.createElement('a');
     const img = document.createElement('img');
@@ -347,25 +364,47 @@ if (typeof document !== 'undefined') {
     dots.className = 'tag-dots';
     dots.inert = selectionMode;
     tile.className = 'gallery-tile';
+    tile.setAttribute('role', 'listitem');
     link.className = 'gallery-link';
-    link.href = `/posts/${encodeURIComponent(post.name)}`;
-    img.alt = post.name;
+    link.href = `/posts/${encodeURIComponent(entry.post.name)}`;
+    img.alt = entry.post.name;
     img.loading = 'lazy';
-    const entry = {post, tile, link, ratio: imageRatio(post, img), dots, dotLimit: 0};
+    entry.tile = tile;
+    entry.link = link;
+    entry.dots = dots;
     entryByTile.set(tile, entry);
     renderSelection(entry);
     img.addEventListener('load', () => {
-      const ratio = imageRatio(post, img);
+      if (entry.tile !== tile) return;
+      const ratio = imageRatio(entry.post, img);
       if (Math.abs(ratio - entry.ratio) > 0.005) { entry.ratio = ratio; scheduleLayout(); }
     });
     link.append(img);
     tile.append(link, dots);
+    grid.insertBefore(tile, before);
+    mounted.set(entry.post.name, entry);
     // Keep potentially animated formats moving in the gallery.
+    const {post} = entry;
     const tileURL = post.format === 'jpeg' || post.format === 'png' ? post.url.replace(/^\/images\//, '/thumbs/') : post.url;
     showImage(img, {url: tileURL, original: post.url, format: post.format}, () => { status.textContent = 'Some images cannot be displayed'; });
-    return entry;
+    return tile;
+  }
+  function unmountEntry(entry: GalleryEntry) {
+    if (!entry.tile) return;
+    const img = entry.link?.querySelector('img');
+    if (img) { img.onerror = null; img.removeAttribute('src'); }
+    entry.tile.remove();
+    entry.tile = undefined;
+    entry.link = undefined;
+    entry.dots = undefined;
+    entry.applied = undefined;
+    entry.dotLimit = 0;
+    entry.renderedTags = undefined;
+    entry.renderedFilter = undefined;
+    mounted.delete(entry.post.name);
   }
   function renderSelection(entry: GalleryEntry) {
+    if (!entry.tile || !entry.link) return;
     const active = selectedImages.has(entry.post.name);
     entry.tile.classList.toggle('is-selected', active);
     const description = `${entry.post.name}${entry.post.tags.length ? ', tags: ' + entry.post.tags.join(', ') : ''}`;
@@ -390,7 +429,7 @@ if (typeof document !== 'undefined') {
     if (!selectionMode || deleting || batchDeleting) return;
     const name = entry.post.name;
     if (shift && rangeAnchor) {
-      const visible = entries.filter(item => !item.tile.hidden);
+      const visible = visibleEntries;
       const range = selectionRange(visible.map(item => item.post.name), rangeAnchor, name);
       if (range) {
         for (const item of visible.slice(range[0], range[1] + 1)) {
@@ -410,11 +449,12 @@ if (typeof document !== 'undefined') {
   function clearSelection() {
     rangeAnchor = null;
     if (!selectedImages.size) return;
-    for (const entry of entries) if (selectedImages.has(entry.post.name)) {
-      selectedImages.delete(entry.post.name);
-      renderSelection(entry);
-    }
+    const selected = [...selectedImages];
     selectedImages.clear();
+    for (const name of selected) {
+      const entry = mounted.get(name);
+      if (entry) renderSelection(entry);
+    }
     updateSelectionCount();
   }
   function setSelectionMode(active: boolean) {
@@ -424,7 +464,7 @@ if (typeof document !== 'undefined') {
     selectModeButton.setAttribute('aria-label', selectionMode ? 'Done selecting' : 'Select images');
     selectModeButton.title = selectionMode ? 'Done selecting' : 'Select images';
     if (!selectionMode) clearSelection();
-    for (const entry of entries) { entry.dots.inert = selectionMode; renderSelection(entry); }
+    for (const entry of mounted.values()) { if (entry.dots) entry.dots.inert = selectionMode; renderSelection(entry); }
     updateSelectionCount();
   }
   selectModeButton.addEventListener('click', () => setSelectionMode(!selectionMode));
@@ -479,13 +519,15 @@ if (typeof document !== 'undefined') {
   }
 
   function renderDots(entry: GalleryEntry, width: number) {
+    if (!entry.dots) return;
+    const dots = entry.dots;
     const limit = width < 92 ? 1 : width < 140 ? 3 : 5;
     const filter = [...selectedTags.keys()].join('\0');
     if (entry.dotLimit === limit && entry.renderedTags === entry.post.tags && entry.renderedFilter === filter) return;
     entry.dotLimit = limit;
     entry.renderedTags = entry.post.tags;
     entry.renderedFilter = filter;
-    entry.dots.replaceChildren();
+    dots.replaceChildren();
     const shown = entry.post.tags.slice(0, limit);
     for (const tag of shown) {
       const button = document.createElement('button');
@@ -499,28 +541,63 @@ if (typeof document !== 'undefined') {
       dot.style.setProperty('--tag-color', tagColor(tag));
       button.append(dot);
       button.addEventListener('click', () => { if (!selectionMode) toggleFilter(tag); });
-      entry.dots.append(button);
+      dots.append(button);
     }
     renderSelection(entry);
   }
 
-  function layout() {
+  let windowScheduled = false;
+  function renderWindow() {
+    const top = -grid.getBoundingClientRect().top;
+    const overscan = window.innerHeight * 1.5;
+    const [start, end] = windowRange(visibleRects, top - overscan, top + window.innerHeight + overscan);
+    const needed = new Set<string>();
+    let before: Node | null = null;
+    for (let i = end - 1; i >= start; i--) {
+      const entry = visibleEntries[i], rect = visibleRects[i];
+      const tile: HTMLDivElement = entry.tile ?? mountEntry(entry, before);
+      if (entry.applied !== rect) {
+        Object.assign(tile.style, {left: `${rect.x}px`, top: `${rect.y}px`, width: `${rect.width}px`, height: `${rect.height}px`});
+        tile.setAttribute('aria-posinset', String(i + 1));
+        tile.setAttribute('aria-setsize', String(visibleEntries.length));
+        entry.applied = rect;
+        renderDots(entry, rect.width);
+      }
+      before = tile;
+      needed.add(entry.post.name);
+    }
+    for (const entry of mounted.values()) if (!needed.has(entry.post.name)) unmountEntry(entry);
+  }
+  function scheduleWindow() {
+    if (windowScheduled) return;
+    windowScheduled = true;
+    requestAnimationFrame(() => { windowScheduled = false; renderWindow(); });
+  }
+  window.addEventListener('scroll', scheduleWindow, {passive: true});
+  window.addEventListener('resize', scheduleWindow);
+
+  function layout(anchor?: ViewAnchor) {
     const width = grid.clientWidth;
     if (!width) return;
     const selectedKeys = [...selectedTags.keys()];
-    const visible = entries.filter(({post}) => selectedKeys.every(id => post.tags.some(tag => key(tag) === id)));
-    const {positions, height} = layoutRows(visible.map(entry => entry.ratio), width, preferredHeight());
-    const visibleSet = new Set(visible);
-    for (const entry of entries) entry.tile.hidden = !visibleSet.has(entry);
-    visible.forEach((entry, index) => {
-      const rect = positions[index];
-      Object.assign(entry.tile.style, {left: `${rect.x}px`, top: `${rect.y}px`, width: `${rect.width}px`, height: `${rect.height}px`});
-      renderDots(entry, rect.width);
-    });
+    visibleEntries = entries.filter(({post}) => selectedKeys.every(id => post.tags.some(tag => key(tag) === id)));
+    const {positions, height} = layoutRows(visibleEntries.map(entry => entry.ratio), width, preferredHeight());
+    visibleRects = positions;
+    visibleEntries.forEach((entry, index) => { entry.rect = positions[index]; });
     grid.style.height = `${height}px`;
+    if (anchor) {
+      const tile = anchor.element.closest<HTMLDivElement>('.gallery-tile');
+      const entry = tile && entryByTile.get(tile);
+      if (entry?.rect) {
+        const top = grid.getBoundingClientRect().top + entry.rect.y;
+        const maxScroll = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+        window.scrollTo(0, Math.max(0, Math.min(maxScroll, window.scrollY + top + entry.rect.height * anchor.fraction - anchor.y)));
+      }
+    }
+    renderWindow();
     const hiddenByNSFW = !showNSFW && (selectedTags.has(key(NSFW_TAG)) || (!entries.length && posts.some(isNSFW)));
     if (hiddenByNSFW) status.textContent = 'NSFW images hidden';
-    else if (selectedTags.size && !visible.length) status.textContent = 'No images match these filters';
+    else if (selectedTags.size && !visibleEntries.length) status.textContent = 'No images match these filters';
     else status.textContent = entries.length ? '' : 'No images yet';
   }
   let scheduled = false;
@@ -555,10 +632,9 @@ if (typeof document !== 'undefined') {
         return entry;
       }
       const added = createEntry(post);
-      grid.append(added.tile);
       return added;
     });
-    for (const entry of existing.values()) { entry.tile.remove(); selectedImages.delete(entry.post.name); }
+    for (const entry of existing.values()) { unmountEntry(entry); selectedImages.delete(entry.post.name); }
     entries.splice(0, entries.length, ...updated);
     updateSelectionCount();
     posts = items;
@@ -570,11 +646,12 @@ if (typeof document !== 'undefined') {
   function setShowNSFW(value: boolean) {
     if (batchDeleting || showNSFW === value) return;
     const toolbarBottom = tagToolbar.getBoundingClientRect().bottom;
-    let anchor = detail.hidden ? entries.find(entry => !entry.tile.hidden && !isNSFW(entry.post) && entry.tile.getBoundingClientRect().bottom > toolbarBottom) : undefined;
-    let top = anchor?.tile.getBoundingClientRect().top;
+    const gridTop = grid.getBoundingClientRect().top;
+    let anchor = detail.hidden ? visibleEntries.find(entry => entry.rect && !isNSFW(entry.post) && gridTop + entry.rect.y + entry.rect.height > toolbarBottom) : undefined;
+    let top = anchor?.rect ? gridTop + anchor.rect.y : undefined;
     if (!value && revealAnchor && Math.abs(window.scrollY - revealAnchor.scroll) < 2) {
       const previous = entries.find(entry => entry.post.name === revealAnchor?.name);
-      if (previous && !previous.tile.hidden) { anchor = previous; top = revealAnchor.top; }
+      if (previous?.rect && visibleEntries.includes(previous)) { anchor = previous; top = revealAnchor.top; }
     }
     showNSFW = value;
     hiddenEye.toggleAttribute('hidden', value);
@@ -586,7 +663,10 @@ if (typeof document !== 'undefined') {
     syncGallery(posts);
     if (anchor && top !== undefined) {
       const moved = entries.find(entry => entry.post.name === anchor.post.name);
-      if (moved) window.scrollBy(0, moved.tile.getBoundingClientRect().top - top);
+      if (moved?.rect) {
+        window.scrollBy(0, grid.getBoundingClientRect().top + moved.rect.y - top);
+        renderWindow();
+      }
     }
     revealAnchor = value && anchor && top !== undefined ? {name: anchor.post.name, top, scroll: window.scrollY} : null;
     if (!value && !detail.hidden && isNSFW({tags: detailTags})) hideNSFWImage();

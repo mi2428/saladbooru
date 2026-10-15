@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"image"
 	"image/draw"
@@ -38,6 +39,9 @@ func thumbnailCacheLimit() (int, error) {
 }
 
 func (s *server) thumbnail(w http.ResponseWriter, r *http.Request) {
+	if r.Context().Err() != nil {
+		return
+	}
 	f, _, contentType, err := s.openImage(r.PathValue("name"))
 	if err != nil {
 		http.NotFound(w, r)
@@ -53,8 +57,11 @@ func (s *server) thumbnail(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Image unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	data, err := s.thumbnailBytes(r.PathValue("name"), f, stat)
+	data, err := s.thumbnailBytes(r.Context(), r.PathValue("name"), f, stat)
 	if err != nil {
+		if r.Context().Err() != nil {
+			return
+		}
 		slog.Warn("thumbnail failed", "error", err)
 		http.Error(w, "Thumbnail unavailable", http.StatusServiceUnavailable)
 		return
@@ -66,10 +73,13 @@ func (s *server) thumbnail(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
-func (s *server) thumbnailBytes(name string, f *os.File, stat os.FileInfo) ([]byte, error) {
+func (s *server) thumbnailBytes(ctx context.Context, name string, f *os.File, stat os.FileInfo) ([]byte, error) {
 	// Serialize first-time decodes to bound peak memory.
 	s.thumbMu.Lock()
 	defer s.thumbMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if cached, ok := s.thumbCache[name]; ok && os.SameFile(cached.stat, stat) && cached.stat.Size() == stat.Size() && cached.stat.ModTime().Equal(stat.ModTime()) {
 		return cached.data, nil
 	}
@@ -78,6 +88,9 @@ func (s *server) thumbnailBytes(name string, f *os.File, stat os.FileInfo) ([]by
 	}
 	_, _, _, decoded, err := inspect(f)
 	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	bounds := decoded.Bounds()
@@ -89,8 +102,14 @@ func (s *server) thumbnailBytes(name string, f *os.File, stat os.FileInfo) ([]by
 		xdraw.ApproxBiLinear.Scale(scaled, scaled.Bounds(), decoded, bounds, draw.Src, nil)
 		decoded = scaled
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	var out bytes.Buffer
 	if err := webp.Encode(&out, decoded, webp.Options{Quality: 75, Method: 2}); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	// Clear the whole cache at its limit; use LRU if broad galleries cause repeat decoding.

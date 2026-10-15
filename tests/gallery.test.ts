@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {layoutRows, installZoom, imageRatio, showImage, uploadFiles, clipboardImages, droppedImageURL, fetchDroppedImage, shouldSubmitTagOnEnter, clickedOutsideDialog, tagColor, tagsByUse, filterTags, isNSFW, allowedPosts, tagSuggestions, adjacentName, selectionRange, shouldRefreshPull, detailTapStep} from '../src/app.ts';
+import {layoutRows, windowRange, installZoom, imageRatio, showImage, uploadFiles, clipboardImages, droppedImageURL, fetchDroppedImage, shouldSubmitTagOnEnter, clickedOutsideDialog, tagColor, tagsByUse, filterTags, isNSFW, allowedPosts, tagSuggestions, adjacentName, selectionRange, shouldRefreshPull, detailTapStep} from '../src/app.ts';
 
 test('only AVIF falls back to preview, other formats retry once', () => {
   for (const name of ['x.avif', 'x.AVIF']) {
@@ -268,6 +268,17 @@ test('justified rows preserve natural ratios, order and sparse final row', () =>
   assert.ok(layoutRows(ratios, 800, 110).positions[4].y < positions[4].y);
 });
 
+test('virtual window includes intersecting rows and skips distant tiles', () => {
+  const rectangles = [
+    {x: 0, y: 0, width: 10, height: 100}, {x: 10, y: 0, width: 10, height: 100},
+    {x: 0, y: 102, width: 20, height: 100}, {x: 0, y: 204, width: 20, height: 100},
+  ];
+  assert.deepEqual(windowRange(rectangles, -50, 99), [0, 2]);
+  assert.deepEqual(windowRange(rectangles, 101, 203), [2, 3]);
+  assert.deepEqual(windowRange(rectangles, 205, 400), [3, 4]);
+  assert.deepEqual(windowRange(rectangles, 10000, 11000), [4, 4]);
+});
+
 test('ordinary scroll stays native while modified wheel and two-finger pinch reflow', () => {
   const handlers = new Map<string, EventListener>();
   const layouts: number[] = [];
@@ -302,5 +313,25 @@ test('ordinary scroll stays native while modified wheel and two-finger pinch ref
     else globalThis.document = documentBefore;
     if (windowBefore === undefined) Reflect.deleteProperty(globalThis, 'window');
     else globalThis.window = windowBefore;
+  }
+});
+
+test('zoom passes the viewport image anchor to the gallery layout', () => {
+  const previousDocument = globalThis.document, previousWindow = globalThis.window;
+  const link = {getBoundingClientRect: () => ({top: 100, height: 200})} as Element;
+  let wheel: EventListener | undefined;
+  globalThis.document = {elementFromPoint: () => ({closest: () => link}), querySelector: () => null, getElementById: () => ({hidden: true})} as unknown as Document;
+  globalThis.window = {innerHeight: 700, addEventListener(type: string, handler: EventListener) { if (type === 'wheel') wheel = handler; }} as unknown as Window & typeof globalThis;
+  try {
+    let anchor: {element: Element; fraction: number; y: number} | undefined;
+    installZoom(value => { anchor = value; });
+    assert.ok(wheel);
+    wheel({ctrlKey: true, deltaY: -100, deltaMode: 0, clientX: 200, clientY: 300, preventDefault() {}} as unknown as Event);
+    assert.deepEqual(anchor, {element: link, fraction: 1, y: 300});
+  } finally {
+    if (previousDocument === undefined) Reflect.deleteProperty(globalThis, 'document');
+    else globalThis.document = previousDocument;
+    if (previousWindow === undefined) Reflect.deleteProperty(globalThis, 'window');
+    else globalThis.window = previousWindow;
   }
 });
