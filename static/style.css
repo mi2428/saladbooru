@@ -1,6 +1,6 @@
 :root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; scrollbar-gutter: stable; }
 body { margin: 0; min-height: 100vh; background: #fff; color: #182331; }
-#tag-toolbar { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-bottom: 1px solid #d6dbe0; background: #fff; }
+#tag-toolbar { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 6px; padding: 5px 8px; background: rgb(255 255 255 / 30%); }
 #tag-bar { display: flex; flex: 1; align-items: center; gap: 4px; min-width: 0; }
 #tag-options { display: flex; flex: 1; align-items: center; gap: 6px; min-width: 0; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; padding: 2px 0; }
 #tag-options::-webkit-scrollbar { display: none; }
