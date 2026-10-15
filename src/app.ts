@@ -392,13 +392,11 @@ if (typeof document !== 'undefined') {
   });
   function validateDraft(tag: Tag): string {
     if (!tag || tag.trim() !== tag || Array.from(tag).length > 80 || /[\p{Cc}\p{Cf}]/u.test(tag)) return 'Name must be 1–80 characters without outer spaces';
-    if (draft.length >= 10) return 'Maximum 10 tags per image';
     if (draft.some(current => key(current) === key(tag))) return 'This tag is already added';
     return '';
   }
   function renderSuggestions() {
     suggestions.replaceChildren();
-    if (draft.length >= 10) { suggestions.hidden = true; return; }
     const query = nameInput.value.trim().toLowerCase();
     const matches = tagsByUse(suggestionPool).filter(tag => !draft.some(current => key(tag) === key(current)) && (!query || key(tag).includes(query))).slice(0, query ? 8 : 6);
     suggestions.hidden = matches.length === 0;

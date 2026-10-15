@@ -16,6 +16,7 @@ import (
 	_ "image/png"
 	"io"
 	"log/slog"
+	"maps"
 	"mime"
 	"net/http"
 	"net/url"
@@ -49,7 +50,6 @@ type server struct {
 	listMu     sync.Mutex
 	listCache  map[string]cachedItem
 	tagsMu     sync.RWMutex
-	tags       map[string][]string
 	tagsFailed bool
 }
 
@@ -77,13 +77,12 @@ func newServer(dataDir string) (*server, error) {
 		root.Close()
 		return nil, err
 	}
-	tags, err := readTags(data)
-	if err != nil {
+	if _, err := readTags(data); err != nil {
 		root.Close()
 		data.Close()
 		return nil, fmt.Errorf("invalid tags.json: %w", err)
 	}
-	return &server{images: root, data: data, tags: tags}, nil
+	return &server{images: root, data: data}, nil
 }
 
 func openImages(dataDir string) (*os.Root, error) {
@@ -283,6 +282,11 @@ func (s *server) list(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	defer s.tagsMu.RUnlock()
+	tags, err := readTags(s.data)
+	if err != nil {
+		http.Error(w, "Tag storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
 	dir, err := s.images.Open(".")
 	if err != nil {
 		http.Error(w, "Storage unavailable", http.StatusServiceUnavailable)
@@ -324,7 +328,7 @@ func (s *server) list(w http.ResponseWriter, _ *http.Request) {
 	s.listCache = cache
 	s.listMu.Unlock()
 	for i := range items {
-		items[i].Tags = append([]string{}, s.tags[items[i].Name]...)
+		items[i].Tags = append([]string{}, tags[items[i].Name]...)
 	}
 	sort.Slice(items, func(i, j int) bool {
 		if items[i].Modified.Equal(items[j].Modified) {
@@ -508,7 +512,21 @@ func (s *server) upload(w http.ResponseWriter, r *http.Request) {
 	}{item{Name: name, URL: "/images/" + name, Width: width, Height: height, Modified: stat.ModTime()}})
 }
 
-func dedupe(images *os.Root, tags map[string][]string) (int, error) {
+type duplicate struct {
+	name string
+	stat os.FileInfo
+}
+
+func dedupe(images, data *os.Root) (int, error) {
+	lock, err := lockTags(data)
+	if err != nil {
+		return 0, err
+	}
+	defer lock.Close()
+	tags, err := readTags(data)
+	if err != nil {
+		return 0, err
+	}
 	dir, err := images.Open(".")
 	if err != nil {
 		return 0, err
@@ -518,9 +536,8 @@ func dedupe(images *os.Root, tags map[string][]string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	s := &server{images: images}
-	seen := make(map[[sha256.Size]byte]bool)
-	removed := 0
+	s := &server{images: images, data: data}
+	groups := make(map[[sha256.Size]byte][]duplicate)
 	for _, entry := range entries {
 		name := entry.Name()
 		if !validName(name) || !entry.Type().IsRegular() {
@@ -547,44 +564,74 @@ func dedupe(images *os.Root, tags map[string][]string) (int, error) {
 		}
 		f.Close()
 		if err != nil {
-			return removed, err
+			return 0, err
 		}
 		var digest [sha256.Size]byte
 		copy(digest[:], hash.Sum(nil))
-		// Keep every tagged copy: removing one would leave stale filename metadata.
-		if len(tags[name]) != 0 {
+		groups[digest] = append(groups[digest], duplicate{name, stat})
+	}
+	unchanged := func(copy duplicate) bool {
+		current, err := images.Lstat(copy.name)
+		return err == nil && os.SameFile(copy.stat, current) && copy.stat.Size() == current.Size() && copy.stat.ModTime().Equal(current.ModTime())
+	}
+	next := maps.Clone(tags)
+	type deletion struct{ keep, remove duplicate }
+	var deletions []deletion
+	tagsChanged := false
+	for _, copies := range groups {
+		if len(copies) < 2 {
 			continue
 		}
-		if !seen[digest] {
-			seen[digest] = true
+		stable := true
+		for _, copy := range copies {
+			if !unchanged(copy) {
+				stable = false
+				break
+			}
+		}
+		if !stable {
 			continue
 		}
-		current, err := images.Lstat(name)
-		if err != nil {
-			return removed, err
+		keep := copies[0]
+		merged := append([]string{}, tags[keep.name]...)
+		seen := make(map[string]bool, len(merged))
+		for _, tag := range merged {
+			seen[strings.ToLower(tag)] = true
 		}
-		if !os.SameFile(stat, current) || stat.Size() != current.Size() || !stat.ModTime().Equal(current.ModTime()) {
-			continue
+		for _, copy := range copies[1:] {
+			for _, tag := range tags[copy.name] {
+				if !seen[strings.ToLower(tag)] {
+					merged = append(merged, tag)
+					seen[strings.ToLower(tag)] = true
+				}
+			}
+			if _, exists := next[copy.name]; exists {
+				delete(next, copy.name)
+				tagsChanged = true
+			}
+			deletions = append(deletions, deletion{keep, copy})
 		}
-		if err := images.Remove(name); err != nil {
+		if len(merged) > 0 {
+			next[keep.name] = merged
+		}
+	}
+	// Persist the union before deleting a tagged source; a failed save must not lose tags.
+	if tagsChanged {
+		if err := s.saveTags(next); err != nil {
+			return 0, err
+		}
+	}
+	removed := 0
+	for _, pair := range deletions {
+		if !unchanged(pair.keep) || !unchanged(pair.remove) {
+			return removed, fmt.Errorf("image changed during dedupe: %s", pair.remove.name)
+		}
+		if err := images.Remove(pair.remove.name); err != nil {
 			return removed, err
 		}
 		removed++
 	}
 	return removed, nil
-}
-
-func dedupeLocked(images, data *os.Root) (int, error) {
-	lock, err := lockTags(data)
-	if err != nil {
-		return 0, err
-	}
-	defer lock.Close()
-	tags, err := readTags(data)
-	if err != nil {
-		return 0, err
-	}
-	return dedupe(images, tags)
 }
 
 func main() {
@@ -611,7 +658,7 @@ func main() {
 			slog.Error("dedupe failed", "error", err)
 			os.Exit(1)
 		}
-		removed, err := dedupeLocked(images, data)
+		removed, err := dedupe(images, data)
 		data.Close()
 		images.Close()
 		if err != nil {

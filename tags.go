@@ -52,8 +52,8 @@ func lockTags(data *os.Root) (*os.File, error) {
 }
 
 func validateTags(tags []string) error {
-	if tags == nil || len(tags) > 10 {
-		return errors.New("Tags must be an array of at most 10 entries")
+	if tags == nil {
+		return errors.New("Tags must be an array")
 	}
 	seen := map[string]bool{}
 	for _, name := range tags {
@@ -150,6 +150,11 @@ func (s *server) getTags(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Tag storage unavailable", http.StatusServiceUnavailable)
 		return
 	}
+	tags, err := readTags(s.data)
+	if err != nil {
+		http.Error(w, "Tag storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
 	name := r.PathValue("name")
 	f, _, _, err := s.openImage(name)
 	if err != nil {
@@ -161,7 +166,7 @@ func (s *server) getTags(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	json.NewEncoder(w).Encode(struct {
 		Tags []string `json:"tags"`
-	}{append([]string{}, s.tags[name]...)})
+	}{append([]string{}, tags[name]...)})
 }
 
 func (s *server) putTags(w http.ResponseWriter, r *http.Request) {
@@ -170,8 +175,8 @@ func (s *server) putTags(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Expected application/json", http.StatusUnsupportedMediaType)
 		return
 	}
-	raw, err := io.ReadAll(io.LimitReader(r.Body, 4097))
-	if err != nil || len(raw) > 4096 {
+	raw, err := io.ReadAll(io.LimitReader(r.Body, 16<<20+1))
+	if err != nil || len(raw) > 16<<20 {
 		http.Error(w, "Tag request too large", http.StatusRequestEntityTooLarge)
 		return
 	}
@@ -219,6 +224,11 @@ func (s *server) putTags(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer lock.Close()
+	previous, err := readTags(s.data)
+	if err != nil {
+		http.Error(w, "Tag storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
 	name := r.PathValue("name")
 	f, _, _, err := s.openImage(name)
 	if err != nil {
@@ -226,10 +236,7 @@ func (s *server) putTags(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f.Close()
-	next := make(map[string][]string, len(s.tags)+1)
-	for key, value := range s.tags {
-		next[key] = value
-	}
+	next := maps.Clone(previous)
 	if len(tags) == 0 {
 		delete(next, name)
 	} else {
@@ -265,6 +272,11 @@ func (s *server) deletePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer lock.Close()
+	previous, err := readTags(s.data)
+	if err != nil {
+		http.Error(w, "Tag storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
 	f, _, _, err := s.openImage(name)
 	if err != nil {
 		http.NotFound(w, r)
@@ -281,7 +293,6 @@ func (s *server) deletePost(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Storage unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	previous := s.tags
 	_, tagged := previous[name]
 	if tagged {
 		next := maps.Clone(previous)
@@ -306,7 +317,8 @@ func (s *server) deletePost(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// saveTags is called with tagsMu held. A post-rename sync failure closes the store to writes and reads.
+// saveTags is called under the file lock (and tagsMu for HTTP writes).
+// A post-rename sync failure closes the store to writes and reads.
 func (s *server) saveTags(next map[string][]string) error {
 	previous, err := s.data.Lstat("tags.json")
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -355,6 +367,5 @@ func (s *server) saveTags(next map[string][]string) error {
 		s.tagsFailed = true
 		return err
 	}
-	s.tags = next
 	return nil
 }

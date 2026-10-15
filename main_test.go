@@ -228,7 +228,7 @@ func TestDedupe(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(images, "unique.jpg"), unique, 0600); err != nil {
 		t.Fatal(err)
 	}
-	removed, err := dedupe(s.images, s.tags)
+	removed, err := dedupe(s.images, s.data)
 	if err != nil || removed != 2 {
 		t.Fatalf("dedupe: removed=%d err=%v", removed, err)
 	}
@@ -248,7 +248,7 @@ func TestDedupe(t *testing.T) {
 	if kept != 1 {
 		t.Fatalf("retained %d copies, want 1", kept)
 	}
-	if removed, err := dedupe(s.images, s.tags); err != nil || removed != 0 {
+	if removed, err := dedupe(s.images, s.data); err != nil || removed != 0 {
 		t.Fatalf("second pass: removed=%d err=%v", removed, err)
 	}
 }

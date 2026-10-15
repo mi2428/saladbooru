@@ -78,14 +78,14 @@ func TestTagsAPIAndPersistence(t *testing.T) {
 	}
 }
 
-func TestTenTagsPerImage(t *testing.T) {
+func TestManyTagsPerImage(t *testing.T) {
 	_, images, h := setup(t)
 	if err := os.WriteFile(filepath.Join(images, "one.png"), pngImage(t), 0600); err != nil {
 		t.Fatal(err)
 	}
-	tags := make([]string, 10)
+	tags := make([]string, 300)
 	for i := range tags {
-		tags[i] = fmt.Sprintf("Tag %02d", i)
+		tags[i] = fmt.Sprintf("Tag %03d extra", i)
 	}
 	request := func(values []string) string {
 		raw, err := json.Marshal(map[string][]string{"tags": values})
@@ -94,23 +94,23 @@ func TestTenTagsPerImage(t *testing.T) {
 		}
 		return string(raw)
 	}
+	if len(request(tags)) <= 4096 {
+		t.Fatal("test payload must exceed the old request size limit")
+	}
 	if w := putTags(t, h, "one.png", request(tags)); w.Code != 200 {
-		t.Fatalf("ten tags rejected: %d %s", w.Code, w.Body.String())
+		t.Fatalf("many tags rejected: %d %s", w.Code, w.Body.String())
 	}
-	if w := putTags(t, h, "one.png", request(append(tags, "extra"))); w.Code != 400 {
-		t.Fatalf("eleven tags accepted: %d", w.Code)
-	}
-	if w := get(t, h, "/api/posts"); w.Code != 200 || !strings.Contains(w.Body.String(), `"Tag 09"`) || strings.Contains(w.Body.String(), `"extra"`) {
-		t.Fatalf("tag limit changed stored state: %d %s", w.Code, w.Body.String())
+	if w := get(t, h, "/api/posts"); w.Code != 200 || !strings.Contains(w.Body.String(), `"Tag 299 extra"`) {
+		t.Fatalf("tags missing from list: %d %s", w.Code, w.Body.String())
 	}
 	restarted, err := newServer(filepath.Dir(images))
 	if err != nil {
-		t.Fatal("restart with ten tags: ", err)
+		t.Fatal("restart with many tags: ", err)
 	}
 	defer restarted.images.Close()
 	defer restarted.data.Close()
-	if w := get(t, restarted.routes(), "/api/posts/one.png/tags"); w.Code != 200 || !strings.Contains(w.Body.String(), `"Tag 09"`) {
-		t.Fatalf("ten tags lost after restart: %d %s", w.Code, w.Body.String())
+	if w := get(t, restarted.routes(), "/api/posts/one.png/tags"); w.Code != 200 || !strings.Contains(w.Body.String(), `"Tag 299 extra"`) {
+		t.Fatalf("tags lost after restart: %d %s", w.Code, w.Body.String())
 	}
 }
 
@@ -165,7 +165,11 @@ func TestDeletePostRemovesImageAndTags(t *testing.T) {
 	if w := get(t, restarted.routes(), "/api/posts"); w.Code != 200 || !strings.Contains(w.Body.String(), `"items":[]`) {
 		t.Fatalf("restart listing: %d %s", w.Code, w.Body.String())
 	}
-	if _, ok := s.tags["one.png"]; ok {
+	tags, err := readTags(s.data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := tags["one.png"]; ok {
 		t.Fatal("deleted tag metadata remains")
 	}
 }
@@ -224,7 +228,6 @@ func TestTagsRejectInvalidAndUnsafeImages(t *testing.T) {
 		`null`, `{}`, `{"tags":null}`, `{"tags":{}}`, `{"tags":[]}`, `{"tags":[],"extra":1}`, `{"tags":[],"tags":[]}`,
 		`{"tags":[""]}`, `{"tags":[" x"]}`, `{"tags":[1]}`, `{"tags":[{"name":"x"}]}`,
 		`{"tags":["X","x"]}`, `{"tags":["` + strings.Repeat("x", 81) + `"]}`,
-		`{"tags":["a","b","c","d","e","f","g","h","i","j","k"]}`,
 	} {
 		if w := putTags(t, h, "one.png", body); w.Code != 400 {
 			t.Fatalf("invalid tag payload accepted (%d): %s", w.Code, body)
@@ -299,7 +302,7 @@ func TestTagSaveFailureAndCorruptStartup(t *testing.T) {
 	}
 }
 
-func TestDedupeKeepsTaggedContent(t *testing.T) {
+func TestDedupeMergesTaggedContent(t *testing.T) {
 	s, images, h := setup(t)
 	raw := pngImage(t)
 	for _, name := range []string{"a.png", "b.png", "c.png", "d.png"} {
@@ -307,25 +310,128 @@ func TestDedupeKeepsTaggedContent(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for _, name := range []string{"a.png", "b.png"} {
-		body := `{"tags":["` + name + `"]}`
-		if w := putTags(t, h, name, body); w.Code != 200 {
+	for name, values := range map[string][]string{
+		"a.png": {"shared", "a"},
+		"b.png": {"SHARED", "b"},
+		"d.png": {"d", "Tag 00", "Tag 01", "Tag 02", "Tag 03", "Tag 04", "Tag 05", "Tag 06", "Tag 07", "Tag 08", "Tag 09"},
+	} {
+		body, err := json.Marshal(map[string][]string{"tags": values})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if w := putTags(t, h, name, string(body)); w.Code != 200 {
+			t.Fatalf("tag %s: %d %s", name, w.Code, w.Body.String())
+		}
+	}
+	if removed, err := dedupe(s.images, s.data); err != nil || removed != 3 {
+		t.Fatalf("dedupe: %d %v", removed, err)
+	}
+	entries, err := os.ReadDir(images)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("expected one surviving image: %v %v", entries, err)
+	}
+	kept := entries[0].Name()
+	tags, err := readTags(s.data)
+	if err != nil || len(tags) != 1 || len(tags[kept]) != 14 {
+		t.Fatalf("merged tags: %+v %v", tags, err)
+	}
+	want := map[string]bool{"shared": true, "a": true, "b": true, "d": true}
+	for i := 0; i < 10; i++ {
+		want[fmt.Sprintf("tag %02d", i)] = true
+	}
+	for _, tag := range tags[kept] {
+		key := strings.ToLower(tag)
+		if !want[key] {
+			t.Fatalf("unexpected or duplicate tag: %s", tag)
+		}
+		delete(want, key)
+	}
+	if len(want) != 0 {
+		t.Fatalf("lost tags: %v", want)
+	}
+	if w := get(t, h, "/api/posts/"+kept+"/tags"); w.Code != 200 || !strings.Contains(w.Body.String(), `"Tag 09"`) {
+		t.Fatalf("running server missed migrated tags: %d %s", w.Code, w.Body.String())
+	}
+	if w := get(t, h, "/api/posts"); w.Code != 200 || !strings.Contains(w.Body.String(), `"Tag 09"`) {
+		t.Fatalf("running list missed migrated tags: %d %s", w.Code, w.Body.String())
+	}
+	updated := append(tags[kept], "after")
+	body, err := json.Marshal(map[string][]string{"tags": updated})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := putTags(t, h, kept, string(body)); w.Code != 200 {
+		t.Fatalf("update after dedupe: %d %s", w.Code, w.Body.String())
+	}
+	if again, err := readTags(s.data); err != nil || len(again) != 1 || len(again[kept]) != 15 {
+		t.Fatalf("later update lost merged tags: %+v %v", again, err)
+	}
+	if removed, err := dedupe(s.images, s.data); err != nil || removed != 0 {
+		t.Fatalf("dedupe must be idempotent: %d %v", removed, err)
+	}
+	restarted, err := newServer(filepath.Dir(images))
+	if err != nil {
+		t.Fatal("restart after dedupe: ", err)
+	}
+	defer restarted.images.Close()
+	defer restarted.data.Close()
+	if w := get(t, restarted.routes(), "/api/posts/"+kept+"/tags"); w.Code != 200 || !strings.Contains(w.Body.String(), `"after"`) {
+		t.Fatalf("restart lost merged tags: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestDedupeDoesNotDeleteWhenTagStoreFails(t *testing.T) {
+	s, images, h := setup(t)
+	for _, name := range []string{"one.png", "two.png"} {
+		if err := os.WriteFile(filepath.Join(images, name), pngImage(t), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if w := putTags(t, h, name, `{"tags":["`+name+`"]}`); w.Code != 200 {
 			t.Fatalf("tag %s: %d", name, w.Code)
 		}
 	}
-	if removed, err := dedupe(s.images, s.tags); err != nil || removed != 1 {
-		t.Fatalf("dedupe: %d %v", removed, err)
-	}
-	for _, name := range []string{"a.png", "b.png"} {
-		if _, err := os.Stat(filepath.Join(images, name)); err != nil {
-			t.Fatalf("tagged image %s deleted: %v", name, err)
-		}
-	}
-	if err := os.WriteFile(filepath.Join(filepath.Dir(images), "tags.json"), []byte("broken"), 0600); err != nil {
+	path := filepath.Join(filepath.Dir(images), "tags.json")
+	if err := os.Chmod(path, 0644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := readTags(s.data); err == nil {
-		t.Fatal("dedupe startup would accept corrupted tags")
+	defer os.Chmod(path, 0600)
+	if removed, err := dedupe(s.images, s.data); err == nil || removed != 0 {
+		t.Fatalf("unreadable metadata must block deletion: %d %v", removed, err)
+	}
+	entries, err := os.ReadDir(images)
+	if err != nil || len(entries) != 2 {
+		t.Fatalf("tag storage failure deleted images: %v %v", entries, err)
+	}
+}
+
+func TestDedupeDoesNotDeleteWhenTagSaveFails(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permissions")
+	}
+	s, images, h := setup(t)
+	for _, name := range []string{"one.png", "two.png"} {
+		if err := os.WriteFile(filepath.Join(images, name), pngImage(t), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if w := putTags(t, h, name, `{"tags":["`+name+`"]}`); w.Code != 200 {
+			t.Fatalf("tag %s: %d", name, w.Code)
+		}
+	}
+	data := filepath.Dir(images)
+	if err := os.Chmod(data, 0500); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(data, 0700)
+	if removed, err := dedupe(s.images, s.data); err == nil || removed != 0 {
+		t.Fatalf("failed tag save must block deletion: %d %v", removed, err)
+	}
+	entries, err := os.ReadDir(images)
+	if err != nil || len(entries) != 2 {
+		t.Fatalf("failed save deleted images: %v %v", entries, err)
+	}
+	tags, err := readTags(s.data)
+	if err != nil || len(tags) != 2 {
+		t.Fatalf("failed save changed stored tags: %+v %v", tags, err)
 	}
 }
 
@@ -356,7 +462,7 @@ func TestTagLockHelper(t *testing.T) {
 	}
 	defer images.Close()
 	fmt.Fprintln(os.Stdout, "ready")
-	if removed, err := dedupeLocked(images, root); err != nil || removed != 0 {
+	if removed, err := dedupe(images, root); err != nil || removed != 2 {
 		t.Fatalf("concurrent dedupe: removed=%d err=%v", removed, err)
 	}
 }
@@ -446,9 +552,9 @@ func TestTagLockSerializesPUTAndDedupe(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 	}
 	s.tagsMu.Lock()
-	next := make(map[string][]string, len(s.tags)+1)
-	for name, value := range s.tags {
-		next[name] = value
+	next, err := readTags(s.data)
+	if err != nil {
+		t.Fatal(err)
 	}
 	next["third.png"] = []string{"saved during dedupe"}
 	err = s.saveTags(next)
@@ -465,10 +571,13 @@ func TestTagLockSerializesPUTAndDedupe(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("dedupe did not resume")
 	}
-	for _, name := range []string{"first.png", "second.png", "third.png"} {
-		if _, err := os.Stat(filepath.Join(images, name)); err != nil {
-			t.Fatalf("dedupe removed %s: %v", name, err)
-		}
+	entries, err := os.ReadDir(images)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("dedupe must leave one copy: %v %v", entries, err)
+	}
+	merged, err := readTags(s.data)
+	if err != nil || len(merged) != 1 || len(merged[entries[0].Name()]) != 2 {
+		t.Fatalf("dedupe missed tags written under lock: %+v %v", merged, err)
 	}
 	if err := os.Remove(filepath.Join(data, ".tags.lock")); err != nil {
 		t.Fatal(err)
