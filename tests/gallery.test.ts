@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {layoutRows, windowRange, installZoom, imageRatio, showImage, uploadFiles, clipboardImages, droppedImageURL, fetchDroppedImage, shouldSubmitTagOnEnter, shouldExitSelectionOnEscape, clickedOutsideDialog, tagColor, tagsByUse, filterTags, isNSFW, allowedPosts, tagSuggestions, adjacentName, selectionRange, shouldRefreshPull, pullIntent, pullOffset, detailTapStep} from '../src/app.ts';
+import {layoutRows, windowRange, installZoom, imageRatio, showImage, uploadFiles, clipboardImages, droppedImageURL, fetchDroppedImage, shouldSubmitTagOnEnter, shouldExitSelectionOnEscape, clickedOutsideDialog, tagColor, tagsByUse, filterTags, matchesFilters, isNSFW, allowedPosts, tagSuggestions, adjacentName, selectionRange, shouldRefreshPull, pullIntent, pullOffset, detailTapStep} from '../src/app.ts';
 
 test('only AVIF falls back to preview, other formats retry once', () => {
   for (const name of ['x.avif', 'x.AVIF']) {
@@ -101,7 +101,7 @@ test('uploads dropped files one at a time and continues after failures', async (
   }
 });
 
-test('uploads selected tags with the image in one multipart request', async () => {
+test('uploads selected real tags with the image but never persists the virtual Untagged filter', async () => {
   const originalFetch = globalThis.fetch;
   const originalInfo = console.info;
   let requests = 0;
@@ -115,7 +115,7 @@ test('uploads selected tags with the image in one multipart request', async () =
   };
   console.info = () => {};
   try {
-    assert.deepEqual(await uploadFiles([new File(['image'], 'image.png')], ['Blue', 'red']), []);
+    assert.deepEqual(await uploadFiles([new File(['image'], 'image.png')], ['Blue', 'Untagged', 'red']), []);
     assert.equal(requests, 1);
   } finally {
     globalThis.fetch = originalFetch;
@@ -224,13 +224,22 @@ test('NSFW is a permanent candidate but hidden posts are excluded until explicit
   assert.equal(tagSuggestions(Array.from({length: 35}, (_, i) => ({tags: [`tag${i}`]})), [], '').length, 30);
 });
 
-test('active filters come first without changing popularity order or losing deleted tags', () => {
-  const posts = [{tags: ['Blue', 'red']}, {tags: ['BLUE', 'Green']}, {tags: ['green', 'Blue']}];
+test('active filters come first while Untagged always remains last', () => {
+  const posts = [{tags: ['Blue', 'red']}, {tags: ['BLUE', 'Green']}, {tags: ['green', 'Blue']}, {tags: ['untagged']}];
   const selected = new Map([['red', 'RED'], ['green', 'Green'], ['gone', 'Gone']]);
-  assert.deepEqual(filterTags(posts, selected), ['Green', 'red', 'Gone', 'Blue']);
+  assert.deepEqual(filterTags(posts, selected), ['Green', 'red', 'Gone', 'Blue', 'Untagged']);
   selected.delete('green');
-  assert.deepEqual(filterTags(posts, selected), ['red', 'Gone', 'Blue', 'Green']);
-  assert.deepEqual(filterTags(posts, new Map()), tagsByUse(posts));
+  selected.set('untagged', 'Untagged');
+  assert.deepEqual(filterTags(posts, selected), ['red', 'Gone', 'Blue', 'Green', 'Untagged']);
+  assert.deepEqual(filterTags([], new Map()), ['Untagged']);
+  assert.equal(tagSuggestions(posts, [], '').includes('untagged'), false);
+});
+
+test('Untagged matches only images with no tags', () => {
+  assert.equal(matchesFilters({tags: []}, ['untagged']), true);
+  assert.equal(matchesFilters({tags: ['Blue']}, ['untagged']), false);
+  assert.equal(matchesFilters({tags: []}, ['untagged', 'blue']), false);
+  assert.equal(matchesFilters({tags: ['Blue']}, ['blue']), true);
 });
 
 test('arrow navigation follows gallery order and active filters without wrapping', () => {

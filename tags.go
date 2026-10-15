@@ -61,6 +61,9 @@ func validateTags(tags []string) error {
 		if name == "" || strings.TrimSpace(name) != name || utf8.RuneCountInString(name) > 80 || strings.IndexFunc(name, func(r rune) bool { return unicode.IsControl(r) || unicode.In(r, unicode.Cf) }) >= 0 {
 			return errors.New("Tag names must be 1–80 characters without surrounding whitespace or control characters")
 		}
+		if strings.EqualFold(name, "Untagged") {
+			return errors.New("Untagged is reserved for images without tags")
+		}
 		key := strings.ToLower(name)
 		if seen[key] {
 			return errors.New("Duplicate tag")

@@ -18,7 +18,9 @@ const TWITTER_IMAGE_ORIGIN = new URL('https://pbs.twimg.com');
 const PULL_THRESHOLD = 80;
 const PULL_LOCK_DISTANCE = 10;
 const NSFW_TAG = 'NSFW';
+const UNTAGGED_TAG = 'Untagged';
 const key = (tag: Tag) => tag.toLowerCase();
+const UNTAGGED_KEY = key(UNTAGGED_TAG);
 const TAG_COLORS = [
   '#f05a49', '#f58a39', '#92b934', '#31b96b', '#19b9ac', '#4b86f4', '#a568e5', '#e95c9e',
   '#ec665f', '#ed9941', '#b5bb38', '#64bf42', '#34bb82', '#30b8cb', '#4874dc', '#846fe4',
@@ -159,7 +161,7 @@ export function allowedPosts<T extends Pick<Post, 'tags'>>(posts: readonly T[], 
 }
 
 export function tagSuggestions(posts: Pick<Post, 'tags'>[], draft: readonly Tag[], query: string, includeDefault = true): Tag[] {
-  const tags = tagsByUse(posts);
+  const tags = tagsByUse(posts).filter(tag => key(tag) !== UNTAGGED_KEY);
   const candidates = includeDefault ? [NSFW_TAG, ...tags.filter(tag => key(tag) !== key(NSFW_TAG))] : tags;
   const existing = new Set(draft.map(key));
   const search = key(query.trim());
@@ -167,13 +169,18 @@ export function tagSuggestions(posts: Pick<Post, 'tags'>[], draft: readonly Tag[
 }
 
 export function filterTags(posts: Pick<Post, 'tags'>[], selected: ReadonlyMap<string, Tag>): Tag[] {
-  const tags = tagsByUse(posts);
-  for (const [id, tag] of selected) if (!tags.some(other => key(other) === id)) tags.push(tag);
-  return tags.sort((a, b) => Number(selected.has(key(b))) - Number(selected.has(key(a))));
+  const tags = tagsByUse(posts).filter(tag => key(tag) !== UNTAGGED_KEY);
+  for (const [id, tag] of selected) if (id !== UNTAGGED_KEY && !tags.some(other => key(other) === id)) tags.push(tag);
+  tags.sort((a, b) => Number(selected.has(key(b))) - Number(selected.has(key(a))));
+  return [...tags, UNTAGGED_TAG];
+}
+
+export function matchesFilters(post: Pick<Post, 'tags'>, filters: readonly string[]): boolean {
+  return filters.every(id => id === UNTAGGED_KEY ? post.tags.length === 0 : post.tags.some(tag => key(tag) === id));
 }
 
 export function adjacentName(posts: Pick<Post, 'name' | 'tags'>[], name: string, step: -1 | 1, filters: string[]): string | undefined {
-  const visible = posts.filter(post => filters.every(id => post.tags.some(tag => key(tag) === id)));
+  const visible = posts.filter(post => matchesFilters(post, filters));
   const index = visible.findIndex(post => post.name === name);
   return index < 0 ? undefined : visible[index + step]?.name;
 }
@@ -237,16 +244,17 @@ export function showImage(img: HTMLImageElement, {url, original = url, format}: 
 
 export async function uploadFiles(files: readonly File[], tags: readonly Tag[] = []): Promise<File[]> {
   const failed: File[] = [];
+  const uploadTags = tags.filter(tag => key(tag) !== UNTAGGED_KEY);
   for (const file of files) {
     try {
       const form = new FormData();
       form.append('file', file, file.name);
-      if (tags.length) form.append('tags', JSON.stringify(tags));
+      if (uploadTags.length) form.append('tags', JSON.stringify(uploadTags));
       const response = await fetch('/api/posts', {method: 'POST', body: form});
       if (!response.ok) throw new Error(`Upload failed (${response.status})`);
-      console.info('Image upload succeeded', {name: file.name, type: file.type, size: file.size, tags: [...tags]});
+      console.info('Image upload succeeded', {name: file.name, type: file.type, size: file.size, tags: uploadTags});
     } catch (error) {
-      console.error('Image upload failed', {name: file.name, type: file.type, size: file.size, tags: [...tags]}, error);
+      console.error('Image upload failed', {name: file.name, type: file.type, size: file.size, tags: uploadTags}, error);
       failed.push(file);
     }
   }
@@ -612,7 +620,7 @@ if (typeof document !== 'undefined') {
     const width = grid.clientWidth;
     if (!width) return;
     const selectedKeys = [...selectedTags.keys()];
-    visibleEntries = entries.filter(({post}) => selectedKeys.every(id => post.tags.some(tag => key(tag) === id)));
+    visibleEntries = entries.filter(({post}) => matchesFilters(post, selectedKeys));
     const {positions, height} = layoutRows(visibleEntries.map(entry => entry.ratio), width, preferredHeight());
     visibleRects = positions;
     visibleEntries.forEach((entry, index) => { entry.rect = positions[index]; });
@@ -723,6 +731,7 @@ if (typeof document !== 'undefined') {
   });
   function validateDraft(tag: Tag): string {
     if (!tag || tag.trim() !== tag || Array.from(tag).length > 80 || /[\p{Cc}\p{Cf}]/u.test(tag)) return 'Name must be 1–80 characters without outer spaces';
+    if (key(tag) === UNTAGGED_KEY) return 'Untagged is reserved for images without tags';
     if (draftTags.some(current => key(current) === key(tag))) return batchMode === 'remove' ? 'This tag is already selected' : 'This tag is already added';
     return '';
   }

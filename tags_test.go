@@ -94,7 +94,7 @@ func TestTaggedUploadIsSavedWithImage(t *testing.T) {
 	if image := get(t, h, result.Item.URL); image.Code != 200 || !bytes.Equal(image.Body.Bytes(), pngImage(t)) {
 		t.Fatal("tagged upload altered image")
 	}
-	for _, tags := range []string{`null`, `["blue","Blue"]`, `{"tags":[]}`} {
+	for _, tags := range []string{`null`, `["blue","Blue"]`, `["Untagged"]`, `["uNtAgGeD"]`, `{"tags":[]}`} {
 		if failed := taggedPost(t, h, tags); failed.Code != 400 {
 			t.Fatalf("invalid tags accepted (%s): %d", tags, failed.Code)
 		}
