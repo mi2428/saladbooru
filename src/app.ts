@@ -12,6 +12,7 @@ type GalleryEntry = {
 };
 const TWITTER_IMAGE_ORIGIN = new URL('https://pbs.twimg.com');
 const PULL_THRESHOLD = 80;
+const NSFW_TAG = 'NSFW';
 const key = (tag: Tag) => tag.toLowerCase();
 const TAG_COLORS = [
   '#f05a49', '#f58a39', '#92b934', '#31b96b', '#19b9ac', '#4b86f4', '#a568e5', '#e95c9e',
@@ -135,6 +136,22 @@ export function tagsByUse(posts: Pick<Post, 'tags'>[]): Tag[] {
     }
   }
   return [...counts.values()].sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag)).map(entry => entry.tag);
+}
+
+export function isNSFW(post: Pick<Post, 'tags'>): boolean {
+  return post.tags.some(tag => key(tag) === key(NSFW_TAG));
+}
+
+export function allowedPosts<T extends Pick<Post, 'tags'>>(posts: readonly T[], showNSFW: boolean): T[] {
+  return posts.filter(post => showNSFW || !isNSFW(post));
+}
+
+export function tagSuggestions(posts: Pick<Post, 'tags'>[], draft: readonly Tag[], query: string, includeDefault = true): Tag[] {
+  const tags = tagsByUse(posts);
+  const candidates = includeDefault ? [NSFW_TAG, ...tags.filter(tag => key(tag) !== key(NSFW_TAG))] : tags;
+  const existing = new Set(draft.map(key));
+  const search = key(query.trim());
+  return candidates.filter(tag => !existing.has(key(tag)) && (!search || key(tag).includes(search))).slice(0, 30);
 }
 
 export function filterTags(posts: Pick<Post, 'tags'>[], selected: ReadonlyMap<string, Tag>): Tag[] {
@@ -270,7 +287,12 @@ if (typeof document !== 'undefined') {
   const element = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
   const dropOverlay = dropOverlayElement;
   const tagToolbar = element<HTMLElement>('tag-toolbar');
+  const galleryActions = element<HTMLDivElement>('gallery-actions');
   const selectModeButton = element<HTMLButtonElement>('select-mode');
+  const nsfwToggle = element<HTMLButtonElement>('nsfw-toggle');
+  const hiddenEye = nsfwToggle.querySelector<SVGSVGElement>('.eye-hidden')!;
+  const visibleEye = nsfwToggle.querySelector<SVGSVGElement>('.eye-visible')!;
+  const nsfwReveal = element<HTMLButtonElement>('nsfw-reveal');
   const tagOptions = element<HTMLDivElement>('tag-options');
   const clearFilters = element<HTMLButtonElement>('clear-filters');
   const tagsOpen = element<HTMLButtonElement>('tags-open');
@@ -305,11 +327,13 @@ if (typeof document !== 'undefined') {
   let batchNames: string[] = [];
   let saving = false;
   let posts: Post[] = [];
+  let showNSFW = false;
   let suggestionPool: Post[] = [];
   const selectedTags = new Map<string, Tag>();
   const selectedImages = new Set<string>();
   const entries: GalleryEntry[] = [];
   const entryByTile = new WeakMap<HTMLDivElement, GalleryEntry>();
+  let revealAnchor: {name: string; top: number; scroll: number} | null = null;
   let selectionMode = false;
   let rangeAnchor: string | null = null;
   const pendingUploads: {files: File[]; tags: Tag[]}[] = [];
@@ -357,9 +381,10 @@ if (typeof document !== 'undefined') {
   function updateSelectionCount() {
     selectedCount.textContent = `${selectedImages.size} selected`;
     batchActions.hidden = !selectionMode || !detail.hidden;
-    selectModeButton.hidden = selectionMode || !detail.hidden;
+    galleryActions.hidden = selectionMode || !detail.hidden;
     for (const button of [batchAdd, batchRemove, batchDelete]) button.disabled = !selectedImages.size || batchDeleting;
     batchClear.disabled = batchDeleting;
+    nsfwToggle.disabled = batchDeleting;
   }
   function selectImage(entry: GalleryEntry, shift: boolean) {
     if (!selectionMode || deleting || batchDeleting) return;
@@ -493,7 +518,10 @@ if (typeof document !== 'undefined') {
       renderDots(entry, rect.width);
     });
     grid.style.height = `${height}px`;
-    status.textContent = selectedTags.size && visible.length === 0 ? 'No images match these filters' : entries.length ? '' : 'No images yet';
+    const hiddenByNSFW = !showNSFW && (selectedTags.has(key(NSFW_TAG)) || (!entries.length && posts.some(isNSFW)));
+    if (hiddenByNSFW) status.textContent = 'NSFW images hidden';
+    else if (selectedTags.size && !visible.length) status.textContent = 'No images match these filters';
+    else status.textContent = entries.length ? '' : 'No images yet';
   }
   let scheduled = false;
   function scheduleLayout() {
@@ -505,7 +533,7 @@ if (typeof document !== 'undefined') {
   function renderTagBar(focus?: string) {
     tagOptions.replaceChildren();
     let focused: HTMLButtonElement | undefined;
-    for (const tag of filterTags(posts, selectedTags)) {
+    for (const tag of filterTags(allowedPosts(posts, showNSFW), selectedTags)) {
       const id = key(tag);
       const button = option(tag, selectedTags.has(id), () => toggleFilter(tag));
       button.classList.add('tag-filter');
@@ -519,7 +547,7 @@ if (typeof document !== 'undefined') {
   }
   function syncGallery(items: Post[]) {
     const existing = new Map(entries.map(entry => [entry.post.name, entry] as const));
-    const updated = items.map(post => {
+    const updated = allowedPosts(items, showNSFW).map(post => {
       const entry = existing.get(post.name);
       if (entry) {
         existing.delete(post.name);
@@ -539,6 +567,31 @@ if (typeof document !== 'undefined') {
     tagOptions.scrollLeft = scrollLeft;
     layout();
   }
+  function setShowNSFW(value: boolean) {
+    if (batchDeleting || showNSFW === value) return;
+    const toolbarBottom = tagToolbar.getBoundingClientRect().bottom;
+    let anchor = detail.hidden ? entries.find(entry => !entry.tile.hidden && !isNSFW(entry.post) && entry.tile.getBoundingClientRect().bottom > toolbarBottom) : undefined;
+    let top = anchor?.tile.getBoundingClientRect().top;
+    if (!value && revealAnchor && Math.abs(window.scrollY - revealAnchor.scroll) < 2) {
+      const previous = entries.find(entry => entry.post.name === revealAnchor?.name);
+      if (previous && !previous.tile.hidden) { anchor = previous; top = revealAnchor.top; }
+    }
+    showNSFW = value;
+    hiddenEye.toggleAttribute('hidden', value);
+    visibleEye.toggleAttribute('hidden', !value);
+    nsfwToggle.setAttribute('aria-pressed', String(value));
+    nsfwToggle.setAttribute('aria-label', value ? 'Hide NSFW images' : 'Show NSFW images');
+    nsfwToggle.title = value ? 'Hide NSFW images' : 'Show NSFW images';
+    clearSelection();
+    syncGallery(posts);
+    if (anchor && top !== undefined) {
+      const moved = entries.find(entry => entry.post.name === anchor.post.name);
+      if (moved) window.scrollBy(0, moved.tile.getBoundingClientRect().top - top);
+    }
+    revealAnchor = value && anchor && top !== undefined ? {name: anchor.post.name, top, scroll: window.scrollY} : null;
+    if (!value && !detail.hidden && isNSFW({tags: detailTags})) hideNSFWImage();
+  }
+  nsfwToggle.addEventListener('click', () => setShowNSFW(!showNSFW));
   function toggleFilter(tag: Tag) {
     if (batchDeleting) return;
     clearSelection();
@@ -563,8 +616,7 @@ if (typeof document !== 'undefined') {
   }
   function renderSuggestions() {
     suggestions.replaceChildren();
-    const query = nameInput.value.trim().toLowerCase();
-    const matches = tagsByUse(suggestionPool).filter(tag => !draftTags.some(current => key(tag) === key(current)) && (!query || key(tag).includes(query))).slice(0, 30);
+    const matches = tagSuggestions(suggestionPool, draftTags, nameInput.value, batchMode !== 'remove');
     suggestions.hidden = matches.length === 0;
     for (const tag of matches) {
       suggestions.append(option(tag, false, () => addTag(tag)));
@@ -632,7 +684,7 @@ if (typeof document !== 'undefined') {
     saveButton.disabled = false;
     tagError.textContent = '';
     nameInput.value = '';
-    suggestionPool = mode === 'remove' ? posts.filter(post => selectedImages.has(post.name)) : posts;
+    suggestionPool = mode === 'remove' ? posts.filter(post => selectedImages.has(post.name)) : allowedPosts(posts, showNSFW);
     renderChips();
     renderSuggestions();
     tagsSheet.showModal();
@@ -654,7 +706,7 @@ if (typeof document !== 'undefined') {
     tagError.classList.toggle('loading', !galleryLoaded);
     tagError.textContent = galleryLoaded ? '' : 'Loading existing tags…';
     nameInput.value = '';
-    suggestionPool = posts;
+    suggestionPool = allowedPosts(posts, showNSFW);
     renderChips();
     renderSuggestions();
     tagsSheet.showModal();
@@ -662,7 +714,7 @@ if (typeof document !== 'undefined') {
     tagsTitle.focus({preventScroll: true});
     if (!galleryLoaded) fetchPosts().then(items => {
       if (tagsSheet.open) {
-        suggestionPool = items;
+        suggestionPool = allowedPosts(items, showNSFW);
         renderSuggestions();
         tagError.classList.remove('loading');
         tagError.textContent = '';
@@ -712,8 +764,11 @@ if (typeof document !== 'undefined') {
       detailTags = result.tags;
       const post = posts.find(post => post.name === currentName);
       if (post) post.tags = result.tags;
-      renderTagBar();
-      if (galleryLoaded) layout();
+      if (galleryLoaded) syncGallery(posts);
+      if (!showNSFW && isNSFW({tags: result.tags})) {
+        hideNSFWImage();
+        sheetFocus = nsfwReveal;
+      }
       tagsSheet.close();
     } catch (error) {
       tagError.textContent = error instanceof Error ? error.message : 'Could not save tags';
@@ -828,11 +883,39 @@ if (typeof document !== 'undefined') {
     scale = next;
     renderImage();
   }
+  function hideNSFWImage() {
+    full.onerror = null;
+    full.removeAttribute('src');
+    full.hidden = true;
+    nsfwReveal.hidden = false;
+    detailStatus.textContent = 'NSFW image hidden';
+    tagsOpen.disabled = true;
+    deleteButton.disabled = true;
+  }
+  function showCurrentImage(name: string) {
+    nsfwReveal.hidden = true;
+    full.hidden = false;
+    detailStatus.textContent = '';
+    showImage(full, {url: `/images/${encodeURIComponent(name)}`, format: posts.find(post => post.name === name)?.format}, () => {
+      if (currentName === name && !detail.hidden) detailStatus.textContent = 'This image cannot be displayed';
+    });
+    tagsOpen.disabled = deleting;
+    deleteButton.disabled = deleting;
+  }
+  nsfwReveal.addEventListener('click', () => {
+    if (detail.hidden || !tagsReady || !isNSFW({tags: detailTags})) return;
+    setShowNSFW(true);
+    showCurrentImage(currentName);
+  });
   function openDetail(name: string) {
     if (detail.hidden) savedScroll = window.scrollY;
     openedFromGallery = galleryLoaded;
     const openedName = decodeURIComponent(name);
     currentName = openedName;
+    full.onerror = null;
+    full.removeAttribute('src');
+    full.hidden = true;
+    nsfwReveal.hidden = true;
     grid.inert = true;
     tagToolbar.inert = true;
     detail.hidden = false;
@@ -841,14 +924,11 @@ if (typeof document !== 'undefined') {
     scale = 1;
     panX = panY = 0;
     renderImage();
-    detailStatus.textContent = '';
+    detailStatus.textContent = 'Checking image tags…';
     full.alt = currentName;
-    showImage(full, {url: `/images/${name}`, format: posts.find(post => post.name === openedName)?.format}, () => {
-      if (currentName === openedName && !detail.hidden) detailStatus.textContent = 'This image cannot be displayed';
-    });
     tagsReady = false;
     tagsOpen.disabled = true;
-    deleteButton.disabled = deleting;
+    deleteButton.disabled = true;
     fetch(`/api/posts/${encodeURIComponent(currentName)}/tags`).then(response => {
       if (!response.ok) throw new Error(`Failed to load tags (${response.status})`);
       return response.json() as Promise<{tags: Tag[]}>;
@@ -856,11 +936,12 @@ if (typeof document !== 'undefined') {
       if (currentName !== openedName || detail.hidden) return;
       detailTags = tags;
       const post = posts.find(post => post.name === currentName);
-      if (post) { post.tags = tags; renderTagBar(); layout(); }
+      if (post) { post.tags = tags; if (galleryLoaded) syncGallery(posts); }
       tagsReady = true;
-      tagsOpen.disabled = deleting;
+      if (!showNSFW && isNSFW({tags})) hideNSFWImage();
+      else showCurrentImage(openedName);
     }).catch(error => {
-      if (currentName === openedName && !detail.hidden) detailStatus.textContent = error instanceof Error ? error.message : 'Failed to load tags';
+      if (currentName === openedName && !detail.hidden) detailStatus.textContent = `Could not verify image tags: ${error instanceof Error ? error.message : String(error)}`;
     });
     back.focus({preventScroll: true});
   }
@@ -868,7 +949,7 @@ if (typeof document !== 'undefined') {
     try {
       if (!posts.length) posts = await fetchPosts();
       if (detail.hidden || tagsSheet.open || deleting) return;
-      const name = adjacentName(posts, currentName, step, [...selectedTags.keys()]);
+      const name = adjacentName(allowedPosts(posts, showNSFW), currentName, step, [...selectedTags.keys()]);
       if (!name) return;
       const path = `/posts/${encodeURIComponent(name)}`;
       history.replaceState(null, '', path);
@@ -885,7 +966,8 @@ if (typeof document !== 'undefined') {
     tagToolbar.inert = false;
     document.documentElement.style.overflow = '';
     window.scrollTo(0, savedScroll);
-    previousFocus?.focus({preventScroll: true});
+    if (previousFocus?.isConnected) previousFocus.focus({preventScroll: true});
+    else nsfwToggle.focus({preventScroll: true});
   }
   back.addEventListener('click', event => {
     if (!openedFromGallery) return;

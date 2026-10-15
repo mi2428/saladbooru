@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {layoutRows, installZoom, imageRatio, showImage, uploadFiles, clipboardImages, droppedImageURL, fetchDroppedImage, shouldSubmitTagOnEnter, clickedOutsideDialog, tagColor, tagsByUse, filterTags, adjacentName, selectionRange, shouldRefreshPull, detailTapStep} from '../src/app.ts';
+import {layoutRows, installZoom, imageRatio, showImage, uploadFiles, clipboardImages, droppedImageURL, fetchDroppedImage, shouldSubmitTagOnEnter, clickedOutsideDialog, tagColor, tagsByUse, filterTags, isNSFW, allowedPosts, tagSuggestions, adjacentName, selectionRange, shouldRefreshPull, detailTapStep} from '../src/app.ts';
 
 test('only AVIF falls back to preview, other formats retry once', () => {
   for (const name of ['x.avif', 'x.AVIF']) {
@@ -190,6 +190,19 @@ test('tag popularity counts images, merges case variants and sorts ties by name'
   ];
   assert.deepEqual(tagsByUse(posts), ['blue', 'Aiko', 'Zulu']);
   assert.deepEqual(tagsByUse([]), []);
+});
+
+test('NSFW is a permanent candidate but hidden posts are excluded until explicitly shown', () => {
+  const posts = [{name: 'safe', tags: ['Blue']}, {name: 'hidden', tags: ['nSfW', 'Blue']}];
+  assert.equal(isNSFW(posts[0]), false);
+  assert.equal(isNSFW(posts[1]), true);
+  assert.deepEqual(allowedPosts(posts, false).map(post => post.name), ['safe']);
+  assert.deepEqual(allowedPosts(posts, true).map(post => post.name), ['safe', 'hidden']);
+  assert.deepEqual(tagSuggestions([], [], ''), ['NSFW']);
+  assert.deepEqual(tagSuggestions(posts, [], 'sfw'), ['NSFW']);
+  assert.deepEqual(tagSuggestions(posts, ['nsfw'], ''), ['Blue']);
+  assert.deepEqual(tagSuggestions([], [], '', false), []);
+  assert.equal(tagSuggestions(Array.from({length: 35}, (_, i) => ({tags: [`tag${i}`]})), [], '').length, 30);
 });
 
 test('active filters come first without changing popularity order or losing deleted tags', () => {
