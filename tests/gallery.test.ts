@@ -2,11 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {layoutRows, installZoom, imageRatio, showImage, uploadFiles, droppedImageURL, fetchDroppedImage, shouldSubmitTagOnEnter, clickedOutsideDialog, tagColor, tagsByUse, filterTags, adjacentName, detailTapStep} from '../src/app.ts';
 
-test('native image first, preview once after decode failure, then show error', () => {
-  for (const name of ['x.avif', 'x.AVIF', 'x.png', 'x.jpg']) {
+test('only AVIF falls back to preview, other formats retry once', () => {
+  for (const name of ['x.avif', 'x.AVIF']) {
     const img = {src: '', onerror: () => {}} as unknown as HTMLImageElement;
     let errors = 0;
-    showImage(img, `/images/my%20${name}`, () => { errors++; });
+    showImage(img, `/images/my%20${name}`, () => { errors++; }, undefined, 'avif');
     assert.equal(img.src, `/images/my%20${name}`);
     assert.equal(errors, 0); // A browser that decodes natively never requests a JPEG.
     img.onerror!(new Event('error'));
@@ -19,6 +19,45 @@ test('native image first, preview once after decode failure, then show error', (
     assert.equal(img.src, '/preview/next.avif');
     assert.equal(errors, 1);
   }
+  for (const name of ['x.png', 'x.jpg', 'x.gif', 'x.webp']) {
+    const img = {src: '', onerror: () => {}} as unknown as HTMLImageElement;
+    let errors = 0;
+    showImage(img, `/images/my%20${name}`, () => { errors++; }, undefined, name.slice(name.lastIndexOf('.') + 1));
+    img.onerror!(new Event('error'));
+    assert.match(img.src, new RegExp(`^/images/my%20${name.replace('.', '\\.')}\\?retry=\\d+$`));
+    assert.equal(errors, 0);
+    img.onerror!(new Event('error'));
+    assert.equal(errors, 1);
+  }
+});
+
+test('a missing gallery thumbnail falls back to the original before reporting failure', () => {
+  const img = {src: '', onerror: () => {}} as unknown as HTMLImageElement;
+  let errors = 0;
+  showImage(img, '/thumbs/my%20image.jpg', () => { errors++; }, '/images/my%20image.jpg', 'jpeg');
+  img.onerror!(new Event('error'));
+  assert.equal(img.src, '/images/my%20image.jpg');
+  img.onerror!(new Event('error'));
+  assert.match(img.src, /^\/images\/my%20image\.jpg\?retry=\d+$/);
+  img.onerror!(new Event('error'));
+  assert.equal(errors, 1);
+  showImage(img, '/thumbs/next.avif', () => { errors++; }, '/images/next.avif', 'avif');
+  img.onerror!(new Event('error'));
+  assert.equal(img.src, '/images/next.avif');
+  img.onerror!(new Event('error'));
+  assert.equal(img.src, '/preview/next.avif');
+});
+
+test('direct detail URLs with an unknown format retain the AVIF fallback even when misnamed', () => {
+  const img = {src: '', onerror: () => {}} as unknown as HTMLImageElement;
+  let errors = 0;
+  showImage(img, '/images/animation.jpg', () => { errors++; });
+  img.onerror!(new Event('error'));
+  assert.match(img.src, /^\/images\/animation\.jpg\?retry=\d+$/);
+  img.onerror!(new Event('error'));
+  assert.equal(img.src, '/preview/animation.jpg');
+  img.onerror!(new Event('error'));
+  assert.equal(errors, 1);
 });
 
 test('uploads dropped files one at a time and continues after failures', async () => {

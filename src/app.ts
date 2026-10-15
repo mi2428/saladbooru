@@ -1,5 +1,5 @@
 type Tag = string;
-type Post = {name: string; url: string; width: number; height: number; tags: Tag[]};
+type Post = {name: string; url: string; format: string; width: number; height: number; tags: Tag[]};
 const TWITTER_IMAGE_ORIGIN = new URL('https://pbs.twimg.com');
 const key = (tag: Tag) => tag.toLowerCase();
 const TAG_COLORS = [
@@ -154,13 +154,18 @@ export function clickedOutsideDialog(event: Pick<MouseEvent, 'target' | 'clientX
   return event.clientX < left || event.clientX >= right || event.clientY < top || event.clientY >= bottom;
 }
 
-export function showImage(img: HTMLImageElement, url: string, onError: () => void): void {
-  let fallback = true;
+export function showImage(img: HTMLImageElement, url: string, onError: () => void, original = url, format?: string): void {
+  const sources = url === original ? [url] : [url, original];
+  const preview = original.replace(/^\/images\//, '/preview/');
+  if (format === 'avif' || (!format && /\.avif(?:$|[?#])/i.test(original))) sources.push(preview);
+  else {
+    sources.push(`${original}${original.includes('?') ? '&' : '?'}retry=${Date.now()}`);
+    if (!format) sources.push(preview); // Direct detail URLs have no format metadata.
+  }
+  let next = 0;
   img.onerror = () => {
-    if (fallback) {
-      fallback = false;
-      img.src = url.replace(/^\/images\//, '/preview/');
-    } else onError();
+    if (++next < sources.length) img.src = sources[next];
+    else onError();
   };
   img.src = url;
 }
@@ -272,12 +277,14 @@ if (typeof document !== 'undefined') {
     img.loading = 'lazy';
     const entry = {post, tile, link, ratio: imageRatio(post, img), dots, dotLimit: 0};
     img.addEventListener('load', () => {
-      entry.ratio = imageRatio(post, img);
-      scheduleLayout();
+      const ratio = imageRatio(post, img);
+      if (Math.abs(ratio - entry.ratio) > 0.005) { entry.ratio = ratio; scheduleLayout(); }
     });
     link.append(img);
     tile.append(link, dots);
-    showImage(img, post.url, () => { status.textContent = 'Some images cannot be displayed'; });
+    // Keep potentially animated formats moving in the gallery.
+    const tileURL = post.format === 'jpeg' || post.format === 'png' ? post.url.replace(/^\/images\//, '/thumbs/') : post.url;
+    showImage(img, tileURL, () => { status.textContent = 'Some images cannot be displayed'; }, post.url, post.format);
     return entry;
   }
   function option(tag: Tag, active: boolean, action: () => void): HTMLButtonElement {
@@ -620,7 +627,7 @@ if (typeof document !== 'undefined') {
     full.alt = currentName;
     showImage(full, `/images/${name}`, () => {
       if (currentName === openedName && !detail.hidden) detailStatus.textContent = 'This image cannot be displayed';
-    });
+    }, undefined, posts.find(post => post.name === openedName)?.format);
     tagsReady = false;
     tagsOpen.disabled = true;
     deleteButton.disabled = deleting;

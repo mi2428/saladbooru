@@ -128,8 +128,11 @@ func TestUploadAndDirectDrop(t *testing.T) {
 	if result.Code != 200 || json.Unmarshal(result.Body.Bytes(), &listing) != nil {
 		t.Fatalf("listing: %d %s", result.Code, result.Body.String())
 	}
-	if len(listing.Items) != 2 || listing.Items[0].Name != "my photo.png" || listing.Items[1].Name != uploaded.Item.Name || listing.Items[0].URL != "/images/my%20photo.png" {
+	if len(listing.Items) != 2 || listing.Items[0].Name != "my photo.png" || listing.Items[1].Name != uploaded.Item.Name || listing.Items[0].URL != "/images/my%20photo.png" || listing.Items[0].Format != "png" {
 		t.Fatalf("direct drop/order: %+v", listing.Items)
+	}
+	if thumb := get(t, h, "/thumbs/my%20photo.png"); thumb.Code != 200 || thumb.Header().Get("Content-Type") != "image/webp" {
+		t.Fatalf("escaped thumbnail: %d", thumb.Code)
 	}
 	if w := get(t, h, "/posts/my%20photo.png"); w.Code != 200 || !strings.Contains(w.Body.String(), "id=\"back\"") {
 		t.Fatalf("detail/back: %d", w.Code)
@@ -334,7 +337,7 @@ func TestFormats(t *testing.T) {
 			if err := json.Unmarshal(uploaded.Body.Bytes(), &reply); err != nil {
 				t.Fatal(err)
 			}
-			if reply.Item.Width != tc.width || reply.Item.Height != tc.height {
+			if reply.Item.Width != tc.width || reply.Item.Height != tc.height || reply.Item.Format != strings.TrimPrefix(tc.mime, "image/") {
 				t.Fatalf("uploaded dimensions: %dx%d, want %dx%d", reply.Item.Width, reply.Item.Height, tc.width, tc.height)
 			}
 			if result := get(t, h, reply.Item.URL); result.Code != 200 || result.Header().Get("Content-Type") != tc.mime || !bytes.Equal(result.Body.Bytes(), raw) {
@@ -445,6 +448,168 @@ func TestPreviewPreservesOriginals(t *testing.T) {
 	}
 }
 
+func TestThumbnailsPreserveOriginals(t *testing.T) {
+	_, images, h := setup(t)
+	for _, name := range []string{"source.jpg", "source.png", "two.gif", "two.webp", "source.avif"} {
+		raw, err := os.ReadFile(filepath.Join("testdata", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(images, name), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.HasSuffix(name, ".jpg") && !strings.HasSuffix(name, ".png") {
+			if result := get(t, h, "/thumbs/"+name); result.Code != 404 {
+				t.Fatalf("animated format was flattened: %s, %d", name, result.Code)
+			}
+			continue
+		}
+		for range 2 {
+			response := get(t, h, "/thumbs/"+name)
+			if response.Code != 200 || response.Header().Get("Content-Type") != "image/webp" || response.Header().Get("Cache-Control") != "no-store" || response.Header().Get("Content-Security-Policy") != "sandbox" {
+				t.Fatalf("%s: thumbnail headers: %d %v", name, response.Code, response.Header())
+			}
+			config, err := webp.DecodeConfig(bytes.NewReader(response.Body.Bytes()))
+			if err != nil || config.Width != 4 || config.Height != 2 {
+				t.Fatalf("%s: invalid thumbnail: %+v %v", name, config, err)
+			}
+		}
+		if response := get(t, h, "/images/"+name); !bytes.Equal(response.Body.Bytes(), raw) {
+			t.Fatalf("%s: original changed", name)
+		}
+	}
+	raw, err := os.ReadFile(filepath.Join("testdata", "two.webp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(images, "misnamed.jpg"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if result := get(t, h, "/thumbs/misnamed.jpg"); result.Code != 404 {
+		t.Fatalf("misnamed animation flattened: %d", result.Code)
+	}
+	var listing struct {
+		Items []item `json:"items"`
+	}
+	if err := json.Unmarshal(get(t, h, "/api/posts").Body.Bytes(), &listing); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, entry := range listing.Items {
+		if entry.Name == "misnamed.jpg" {
+			if entry.Format != "webp" {
+				t.Fatalf("format inferred from filename: %s", entry.Format)
+			}
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("misnamed image missing from gallery")
+	}
+	if entries, err := os.ReadDir(filepath.Dir(images)); err != nil || len(entries) != 1 {
+		t.Fatalf("unexpected persisted thumbnails: %d %v", len(entries), err)
+	}
+}
+
+func TestThumbnailResizeAndInvalidation(t *testing.T) {
+	s, images, h := setup(t)
+	var large bytes.Buffer
+	if err := png.Encode(&large, image.NewRGBA(image.Rect(0, 0, 2048, 1024))); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(images, "changing.png")
+	if err := os.WriteFile(path, large.Bytes(), 0600); err != nil {
+		t.Fatal(err)
+	}
+	first := get(t, h, "/thumbs/changing.png")
+	if first.Code != 200 {
+		t.Fatalf("first thumbnail: %d", first.Code)
+	}
+	if config, err := webp.DecodeConfig(bytes.NewReader(first.Body.Bytes())); err != nil || config.Width != 1024 || config.Height != 512 {
+		t.Fatalf("resized dimensions: %+v %v", config, err)
+	}
+	if err := os.WriteFile(path, pngImage(t), 0600); err != nil {
+		t.Fatal(err)
+	}
+	changed := time.Now().Add(time.Hour)
+	if err := os.Chtimes(path, changed, changed); err != nil {
+		t.Fatal(err)
+	}
+	second := get(t, h, "/thumbs/changing.png")
+	if config, err := webp.DecodeConfig(bytes.NewReader(second.Body.Bytes())); err != nil || config.Width != 2 || config.Height != 3 || bytes.Equal(first.Body.Bytes(), second.Body.Bytes()) {
+		t.Fatalf("stale thumbnail: %+v %v", config, err)
+	}
+	decoded, err := webp.Decode(bytes.NewReader(second.Body.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, alpha := decoded.At(1, 1).RGBA(); alpha != 0 {
+		t.Fatalf("transparent PNG thumbnail lost alpha: %d", alpha)
+	}
+	if s.thumbBytes != len(second.Body.Bytes()) {
+		t.Fatalf("cache size %d, want %d", s.thumbBytes, len(second.Body.Bytes()))
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if response := get(t, h, "/thumbs/changing.png"); response.Code != 404 {
+		t.Fatalf("deleted image served from thumbnail cache: %d", response.Code)
+	}
+}
+
+func TestThumbnailCacheLimit(t *testing.T) {
+	const setting = "SALADBOORU_THUMB_CACHE_MIB"
+	t.Setenv(setting, "1")
+	if err := os.Unsetenv(setting); err != nil {
+		t.Fatal(err)
+	}
+	defaultServer, _, _ := setup(t)
+	if defaultServer.thumbLimit != 64<<20 {
+		t.Fatalf("default cache limit: %d", defaultServer.thumbLimit)
+	}
+	for _, tc := range []struct {
+		setting string
+		limit   int
+		invalid bool
+	}{
+		{"0", 0, false},
+		{"4", 4 << 20, false},
+		{"", 0, true},
+		{"-1", 0, true},
+		{"abc", 0, true},
+		{strings.Repeat("9", 32), 0, true},
+	} {
+		t.Run(tc.setting, func(t *testing.T) {
+			t.Setenv(setting, tc.setting)
+			if tc.invalid {
+				if s, err := newServer(t.TempDir()); err == nil {
+					s.images.Close()
+					s.data.Close()
+					t.Fatal("invalid cache limit accepted")
+				}
+				return
+			}
+			s, images, h := setup(t)
+			if s.thumbLimit != tc.limit {
+				t.Fatalf("cache limit %d, want %d", s.thumbLimit, tc.limit)
+			}
+			if tc.limit == 0 {
+				if err := os.WriteFile(filepath.Join(images, "uncached.png"), pngImage(t), 0600); err != nil {
+					t.Fatal(err)
+				}
+				for range 2 {
+					if response := get(t, h, "/thumbs/uncached.png"); response.Code != 200 {
+						t.Fatalf("disabled cache broke thumbnail: %d", response.Code)
+					}
+				}
+				if s.thumbBytes != 0 || len(s.thumbCache) != 0 {
+					t.Fatal("cache disabled but retained thumbnails")
+				}
+			}
+		})
+	}
+}
+
 func TestAnimatedFixturesHaveTwoFrames(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -549,7 +714,7 @@ func TestOnlySafeDirectFiles(t *testing.T) {
 	if len(listing.Items) != 1 || listing.Items[0].Name != "good.png" {
 		t.Fatalf("unsafe files listed: %+v", listing.Items)
 	}
-	for _, path := range []string{"/images/escape.png", "/images/alias.png", "/images/fake.png", "/images/..%2Foutside.png"} {
+	for _, path := range []string{"/images/escape.png", "/images/alias.png", "/images/fake.png", "/images/..%2Foutside.png", "/thumbs/escape.png", "/thumbs/alias.png", "/thumbs/fake.png", "/thumbs/..%2Foutside.png"} {
 		if result := get(t, h, path); result.Code == 200 {
 			t.Fatalf("unsafe path served: %s", path)
 		}
