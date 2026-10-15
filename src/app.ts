@@ -16,6 +16,7 @@ type GalleryEntry = {
 };
 const TWITTER_IMAGE_ORIGIN = new URL('https://pbs.twimg.com');
 const PULL_THRESHOLD = 80;
+const PULL_LOCK_DISTANCE = 10;
 const NSFW_TAG = 'NSFW';
 const key = (tag: Tag) => tag.toLowerCase();
 const TAG_COLORS = [
@@ -186,6 +187,16 @@ export function shouldRefreshPull(distance: number, atTop: boolean): boolean {
   return atTop && distance >= PULL_THRESHOLD;
 }
 
+export function pullIntent(deltaX: number, deltaY: number, pulling: boolean): 'pending' | 'pull' | 'cancel' {
+  if (pulling) return deltaY > 0 ? 'pull' : 'cancel';
+  if (Math.hypot(deltaX, deltaY) < PULL_LOCK_DISTANCE) return 'pending';
+  return deltaY > Math.abs(deltaX) * 1.25 ? 'pull' : 'cancel';
+}
+
+export function pullOffset(distance: number): number {
+  return Math.min(64, Math.max(0, distance) / 2);
+}
+
 export function detailTapStep(event: Pick<MouseEvent, 'target' | 'clientX' | 'button'>, detail: HTMLElement, image: HTMLElement): -1 | 1 | null {
   if (event.button !== 0 || (event.target !== detail && event.target !== image)) return null;
   const {left, width} = detail.getBoundingClientRect();
@@ -290,11 +301,12 @@ if (typeof document !== 'undefined') {
   const fullElement = document.getElementById('full');
   const backElement = document.getElementById('back');
   const pullRefreshElement = document.getElementById('pull-refresh');
-  if (!gridElement || !detailElement || !statusElement || !detailStatusElement || !(dropOverlayElement instanceof HTMLDivElement) || !(fullElement instanceof HTMLImageElement) || !(backElement instanceof HTMLAnchorElement) || !(pullRefreshElement instanceof HTMLDivElement)) {
+  const mainElement = document.querySelector('main');
+  if (!gridElement || !detailElement || !statusElement || !detailStatusElement || !(dropOverlayElement instanceof HTMLDivElement) || !(fullElement instanceof HTMLImageElement) || !(backElement instanceof HTMLAnchorElement) || !(pullRefreshElement instanceof HTMLDivElement) || !(mainElement instanceof HTMLElement)) {
     throw new Error('Missing gallery elements');
   }
   const grid = gridElement, detail = detailElement, status = statusElement, detailStatus = detailStatusElement, full = fullElement, back = backElement;
-  const pullRefresh = pullRefreshElement;
+  const pullRefresh = pullRefreshElement, main = mainElement;
   const element = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
   const dropOverlay = dropOverlayElement;
   const tagToolbar = element<HTMLElement>('tag-toolbar');
@@ -1236,32 +1248,53 @@ if (typeof document !== 'undefined') {
     event.preventDefault();
     queueUploads(files);
   });
-  let pullStartY: number | null = null;
+  let pullStart: {x: number; y: number} | null = null;
   let pullDistance = 0;
+  let pulling = false;
   let refreshing = false;
+  let pullResetTimer = 0;
   const resetPull = () => {
-    pullStartY = null;
+    pullStart = null;
     pullDistance = 0;
+    pulling = false;
+    if (main.classList.contains('is-pulling')) {
+      main.classList.remove('is-pulling');
+      main.classList.add('is-pull-resetting');
+      window.clearTimeout(pullResetTimer);
+      pullResetTimer = window.setTimeout(() => {
+        main.classList.remove('is-pull-resetting');
+        main.style.removeProperty('--pull-offset');
+      }, 180);
+    }
     if (!refreshing) pullRefresh.hidden = true;
   };
   document.addEventListener('touchstart', event => {
     if (event.touches.length !== 1) { resetPull(); return; }
     if (refreshing || !galleryReadyForInput() || window.scrollY > 0 || (event.target instanceof Element && event.target.closest('button, input, textarea, [contenteditable]'))) return;
-    pullStartY = event.touches[0].clientY;
+    window.clearTimeout(pullResetTimer);
+    main.classList.remove('is-pull-resetting');
+    main.style.removeProperty('--pull-offset');
+    pullStart = {x: event.touches[0].clientX, y: event.touches[0].clientY};
     pullDistance = 0;
+    pulling = false;
   }, {passive: true});
   document.addEventListener('touchmove', event => {
-    if (pullStartY === null) return;
+    if (!pullStart) return;
     if (event.touches.length !== 1 || window.scrollY > 0) { resetPull(); return; }
-    const distance = event.touches[0].clientY - pullStartY;
-    if (distance < 12) { pullDistance = 0; pullRefresh.hidden = true; return; }
+    const distance = event.touches[0].clientY - pullStart.y;
+    const intent = pullIntent(event.touches[0].clientX - pullStart.x, distance, pulling);
+    if (intent === 'pending') return;
+    if (intent === 'cancel') { resetPull(); return; }
     event.preventDefault();
+    pulling = true;
     pullDistance = distance;
+    main.style.setProperty('--pull-offset', `${pullOffset(distance)}px`);
+    main.classList.add('is-pulling');
     pullRefresh.hidden = false;
     pullRefresh.textContent = shouldRefreshPull(distance, true) ? 'Release to refresh' : 'Pull to refresh';
   }, {passive: false});
   document.addEventListener('touchend', event => {
-    if (pullStartY === null || event.touches.length) return;
+    if (!pullStart || event.touches.length) return;
     const ready = shouldRefreshPull(pullDistance, window.scrollY <= 0) && galleryReadyForInput();
     resetPull();
     if (ready && !refreshing) {

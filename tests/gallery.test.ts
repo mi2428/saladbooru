@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {layoutRows, windowRange, installZoom, imageRatio, showImage, uploadFiles, clipboardImages, droppedImageURL, fetchDroppedImage, shouldSubmitTagOnEnter, clickedOutsideDialog, tagColor, tagsByUse, filterTags, isNSFW, allowedPosts, tagSuggestions, adjacentName, selectionRange, shouldRefreshPull, detailTapStep} from '../src/app.ts';
+import {layoutRows, windowRange, installZoom, imageRatio, showImage, uploadFiles, clipboardImages, droppedImageURL, fetchDroppedImage, shouldSubmitTagOnEnter, clickedOutsideDialog, tagColor, tagsByUse, filterTags, isNSFW, allowedPosts, tagSuggestions, adjacentName, selectionRange, shouldRefreshPull, pullIntent, pullOffset, detailTapStep} from '../src/app.ts';
 
 test('only AVIF falls back to preview, other formats retry once', () => {
   for (const name of ['x.avif', 'x.AVIF']) {
@@ -240,6 +240,17 @@ test('pull-to-refresh requires a released pull past the threshold at the top', (
   assert.equal(shouldRefreshPull(79, true), false);
   assert.equal(shouldRefreshPull(80, true), true);
   assert.equal(shouldRefreshPull(120, false), false);
+});
+
+test('pull-to-refresh locks only onto a deliberate downward gesture', () => {
+  assert.equal(pullIntent(4, 5, false), 'pending');
+  assert.equal(pullIntent(0, -12, false), 'cancel');
+  assert.equal(pullIntent(12, 10, false), 'cancel');
+  assert.equal(pullIntent(5, 12, false), 'pull');
+  assert.equal(pullIntent(40, 20, true), 'pull');
+  assert.equal(pullIntent(0, 0, true), 'cancel');
+  assert.equal(pullOffset(80), 40);
+  assert.equal(pullOffset(1000), 64);
 });
 
 test('viewer taps and mouse clicks use screen halves without intercepting viewer controls', () => {
