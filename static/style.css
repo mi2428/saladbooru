@@ -34,6 +34,8 @@ main.is-pull-resetting { transform: translate3d(0, 0, 0); transition: transform 
 #status:not(:empty) { position: fixed; right: max(12px, env(safe-area-inset-right)); bottom: max(8px, env(safe-area-inset-bottom)); z-index: 5; max-width: calc(100vw - 24px); margin: 0; color: #526279; font-size: 12px; text-align: right; }
 #gallery-actions:not([hidden]) ~ #status:not(:empty), #batch-actions:not([hidden]) ~ #status:not(:empty) { bottom: calc(max(16px, env(safe-area-inset-bottom)) + 64px); }
 #gallery-actions, #batch-actions, #detail-actions { display: flex; align-items: center; gap: 8px; box-sizing: border-box; padding: 6px 10px; border-radius: 28px; background: #182331eb; color: #fff; box-shadow: 0 4px 18px #0b1d3155; }
+#batch-actions.is-success { background: #1d7044f2; }
+#batch-actions.is-failure { background: #9b293df2; }
 #detail-actions { background: #29384bf2; }
 #gallery-actions, #batch-actions { position: fixed; right: max(16px, env(safe-area-inset-right)); bottom: max(16px, env(safe-area-inset-bottom)); z-index: 5; max-width: calc(100vw - 32px); overflow-x: auto; white-space: nowrap; }
 #selected-count { font-size: 14px; font-weight: 600; }

@@ -231,17 +231,18 @@ export function showImage(img: HTMLImageElement, {url, original = url, format}: 
   img.src = url;
 }
 
-export async function uploadFiles(files: readonly File[], onProgress: (file: File, index: number) => void, tags: readonly Tag[] = []): Promise<File[]> {
+export async function uploadFiles(files: readonly File[], tags: readonly Tag[] = []): Promise<File[]> {
   const failed: File[] = [];
-  for (const [index, file] of files.entries()) {
-    onProgress(file, index);
+  for (const file of files) {
     try {
       const form = new FormData();
       form.append('file', file, file.name);
       if (tags.length) form.append('tags', JSON.stringify(tags));
       const response = await fetch('/api/posts', {method: 'POST', body: form});
       if (!response.ok) throw new Error(`Upload failed (${response.status})`);
-    } catch {
+      console.info('Image upload succeeded', {name: file.name, type: file.type, size: file.size, tags: [...tags]});
+    } catch (error) {
+      console.error('Image upload failed', {name: file.name, type: file.type, size: file.size, tags: [...tags]}, error);
       failed.push(file);
     }
   }
@@ -345,6 +346,7 @@ if (typeof document !== 'undefined') {
   let tagsReady = false;
   let deleting = false;
   let batchDeleting = false;
+  let batchFeedbackTimer = 0;
   let draftTags: Tag[] = [];
   let batchMode: 'add' | 'remove' | null = null;
   let batchNames: string[] = [];
@@ -430,12 +432,24 @@ if (typeof document !== 'undefined') {
     }
   }
   function updateSelectionCount() {
-    selectedCount.textContent = `${selectedImages.size} selected`;
+    selectedCount.textContent = batchActions.classList.contains('is-success') ? 'Succeeded!'
+      : batchActions.classList.contains('is-failure') ? 'Failed!'
+      : `${selectedImages.size} selected`;
     batchActions.hidden = !selectionMode || !detail.hidden;
     galleryActions.hidden = selectionMode || !detail.hidden;
     for (const button of [batchAdd, batchRemove, batchDelete]) button.disabled = !selectedImages.size || batchDeleting;
     batchClear.disabled = batchDeleting;
     nsfwToggle.disabled = batchDeleting;
+  }
+  function showBatchFeedback(success: boolean) {
+    window.clearTimeout(batchFeedbackTimer);
+    batchActions.classList.toggle('is-success', success);
+    batchActions.classList.toggle('is-failure', !success);
+    updateSelectionCount();
+    batchFeedbackTimer = window.setTimeout(() => {
+      batchActions.classList.remove('is-success', 'is-failure');
+      updateSelectionCount();
+    }, 1000);
   }
   function selectImage(entry: GalleryEntry, shift: boolean) {
     if (!selectionMode || deleting || batchDeleting) return;
@@ -495,24 +509,26 @@ if (typeof document !== 'undefined') {
           const response = await fetch(`/api/posts/${encodeURIComponent(name)}`, {method: 'DELETE'});
           if (!response.ok) throw new Error(`Deletion failed (${response.status})`);
           removed.push(name);
-        } catch { failed++; }
+          console.info('Image deletion succeeded', {name});
+        } catch (error) {
+          failed++;
+          console.error('Image deletion failed', {name}, error);
+        }
       }
       for (const name of removed) selectedImages.delete(name);
       if (removed.length) {
         try {
           syncGallery(await fetchPosts());
-        } catch {
+        } catch (error) {
           const completed = new Set(removed);
           for (const entry of entries) if (completed.has(entry.post.name)) renderSelection(entry);
           updateSelectionCount();
-          status.textContent = `Deleted ${removed.length} images, but could not refresh the gallery. ${failed} failed.`;
-          return;
+          console.error('Gallery refresh after deletion failed', {deleted: removed, failed}, error);
         }
       }
       updateSelectionCount();
       if (!selectedImages.size) batchClear.focus({preventScroll: true});
-      const deleted = `Deleted ${removed.length} ${removed.length === 1 ? 'image' : 'images'}`;
-      status.textContent = failed ? `${deleted}; ${failed} failed and remain selected.` : `${deleted}.`;
+      showBatchFeedback(failed === 0);
     } finally {
       batchDeleting = false;
       updateSelectionCount();
@@ -837,15 +853,16 @@ if (typeof document !== 'undefined') {
           method: 'PATCH', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({names, [mode]: draftTags}),
         });
         if (!response.ok) throw new Error(`Could not update tags (${response.status})`);
+        console.info('Batch tag update succeeded', {mode, names, tags: [...draftTags]});
         sheetFocus = batchClear;
         tagsSheet.close();
         clearSelection();
         try {
           syncGallery(await fetchPosts());
-          status.textContent = `${mode === 'add' ? 'Added' : 'Removed'} tags on ${names.length} images.`;
-        } catch {
-          status.textContent = `Updated ${names.length} images, but could not refresh the gallery.`;
+        } catch (error) {
+          console.error('Gallery refresh after tag update failed', {mode, names}, error);
         }
+        showBatchFeedback(true);
         return;
       }
       const response = await fetch(`/api/posts/${encodeURIComponent(currentName)}/tags`, {
@@ -853,6 +870,7 @@ if (typeof document !== 'undefined') {
       });
       if (!response.ok) throw new Error(`Could not save tags (${response.status})`);
       const result = await response.json() as {tags: Tag[]};
+      console.info('Image tag update succeeded', {name: currentName, tags: result.tags});
       detailTags = result.tags;
       const post = posts.find(post => post.name === currentName);
       if (post) post.tags = result.tags;
@@ -863,7 +881,14 @@ if (typeof document !== 'undefined') {
       }
       tagsSheet.close();
     } catch (error) {
-      tagError.textContent = error instanceof Error ? error.message : 'Could not save tags';
+      if (batchMode) {
+        console.error('Batch tag update failed', {mode: batchMode, names: [...batchNames], tags: [...draftTags]}, error);
+        tagsSheet.close();
+        showBatchFeedback(false);
+      } else {
+        console.error('Image tag update failed', {name: currentName, tags: [...draftTags]}, error);
+        tagError.textContent = error instanceof Error ? error.message : 'Could not save tags';
+      }
     } finally {
       saving = false;
       tagsSheet.querySelectorAll<HTMLInputElement | HTMLButtonElement>('input, button').forEach(control => { control.disabled = false; });
@@ -879,12 +904,14 @@ if (typeof document !== 'undefined') {
     try {
       const response = await fetch(`/api/posts/${encodeURIComponent(name)}`, {method: 'DELETE'});
       if (!response.ok) throw new Error(`Could not delete image (${response.status})`);
+      console.info('Image deletion succeeded', {name});
       if (galleryLoaded) {
         syncGallery(posts.filter(post => post.name !== name));
         previousFocus = grid.querySelector<HTMLAnchorElement>('.gallery-tile:not([hidden]) .gallery-link') ?? selectModeButton;
       }
       if (!detail.hidden && currentName === name) back.click();
     } catch (error) {
+      console.error('Image deletion failed', {name}, error);
       if (!detail.hidden && currentName === name) detailStatus.textContent = error instanceof Error ? error.message : 'Could not delete image';
     } finally {
       deleting = false;
@@ -910,26 +937,16 @@ if (typeof document !== 'undefined') {
     try {
       while (pendingUploads.length) {
         const batch = pendingUploads.shift()!;
-        const batchFailed = await uploadFiles(batch.files, (file, index) => {
-          status.textContent = `Uploading ${index + 1} of ${batch.files.length}: ${file.name}`;
-        }, batch.tags);
+        const batchFailed = await uploadFiles(batch.files, batch.tags);
         uploaded += batch.files.length - batchFailed.length;
         failed.push(...batchFailed);
       }
       if (uploaded) {
         try {
           syncGallery(await fetchPosts());
-        } catch {
-          status.textContent = `Uploaded ${uploaded} ${uploaded === 1 ? 'image' : 'images'}, but could not refresh the gallery.`;
-          return;
+        } catch (error) {
+          console.error('Gallery refresh after image upload failed', {uploaded, failed: failed.map(file => file.name)}, error);
         }
-      }
-      if (failed.length) {
-        const names = failed.slice(0, 3).map(file => file.name).join(', ');
-        const more = failed.length > 3 ? `, and ${failed.length - 3} more` : '';
-        status.textContent = `Uploaded ${uploaded} ${uploaded === 1 ? 'image' : 'images'}; ${failed.length} failed: ${names}${more}.`;
-      } else {
-        status.textContent = `Uploaded ${uploaded} ${uploaded === 1 ? 'image' : 'images'}.`;
       }
     } finally {
       uploading = false;
@@ -941,13 +958,12 @@ if (typeof document !== 'undefined') {
     void processUploads();
   }
   async function queueDroppedImage(value: string, tags: Tag[]) {
-    status.textContent = 'Fetching dropped image…';
     try {
-      queueUploads([await fetchDroppedImage(value)], tags);
+      const file = await fetchDroppedImage(value);
+      console.info('Dropped image fetched', {name: file.name, type: file.type, size: file.size});
+      queueUploads([file], tags);
     } catch (error) {
-      status.textContent = error instanceof TypeError
-        ? 'Could not fetch image. The source may block cross-origin access.'
-        : error instanceof Error ? error.message : 'Could not fetch dropped image';
+      console.error('Dropped image fetch failed', error);
     }
   }
 
@@ -1238,7 +1254,7 @@ if (typeof document !== 'undefined') {
     } else if (event.dataTransfer) {
       const url = droppedImageURL(event.dataTransfer);
       if (url) void queueDroppedImage(url, [...selectedTags.values()]);
-      else status.textContent = 'Drop an image file or a supported Twitter image URL.';
+      else console.error('Dropped item is not an image file or supported Twitter image URL');
     }
   });
   document.addEventListener('paste', event => {

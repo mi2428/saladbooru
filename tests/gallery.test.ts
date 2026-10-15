@@ -62,7 +62,9 @@ test('direct detail URLs with an unknown format retain the AVIF fallback even wh
 
 test('uploads dropped files one at a time and continues after failures', async () => {
   const originalFetch = globalThis.fetch;
+  const originalInfo = console.info, originalError = console.error;
   const uploaded: string[] = [];
+  const succeeded: string[] = [], failedLogs: string[] = [];
   let active = 0;
   let maxActive = 0;
   globalThis.fetch = async (url, init) => {
@@ -82,21 +84,26 @@ test('uploads dropped files one at a time and continues after failures', async (
     uploaded.push(file.name);
     return new Response(null, {status: file.name === 'bad.png' ? 422 : 201});
   };
+  console.info = (_message, detail) => { succeeded.push((detail as {name: string}).name); };
+  console.error = (_message, detail) => { failedLogs.push((detail as {name: string}).name); };
   try {
     const files = [new File(['1'], 'first.png'), new File(['2'], 'bad.png'), new File(['3'], 'last.png')];
-    const progress: string[] = [];
-    const failed = await uploadFiles(files, (file, index) => progress.push(`${index}:${file.name}`));
+    const failed = await uploadFiles(files);
     assert.deepEqual(uploaded, ['first.png', 'bad.png', 'last.png']);
     assert.equal(maxActive, 1);
-    assert.deepEqual(progress, ['0:first.png', '1:bad.png', '2:last.png']);
+    assert.deepEqual(succeeded, ['first.png', 'last.png']);
+    assert.deepEqual(failedLogs, ['bad.png']);
     assert.deepEqual(failed.map(file => file.name), ['bad.png']);
   } finally {
     globalThis.fetch = originalFetch;
+    console.info = originalInfo;
+    console.error = originalError;
   }
 });
 
 test('uploads selected tags with the image in one multipart request', async () => {
   const originalFetch = globalThis.fetch;
+  const originalInfo = console.info;
   let requests = 0;
   globalThis.fetch = async (url, init) => {
     assert.equal(url, '/api/posts');
@@ -106,11 +113,13 @@ test('uploads selected tags with the image in one multipart request', async () =
     requests++;
     return new Response(null, {status: 201});
   };
+  console.info = () => {};
   try {
-    assert.deepEqual(await uploadFiles([new File(['image'], 'image.png')], () => {}, ['Blue', 'red']), []);
+    assert.deepEqual(await uploadFiles([new File(['image'], 'image.png')], ['Blue', 'red']), []);
     assert.equal(requests, 1);
   } finally {
     globalThis.fetch = originalFetch;
+    console.info = originalInfo;
   }
 });
 
