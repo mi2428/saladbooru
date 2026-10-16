@@ -21,6 +21,7 @@ import (
 
 	"github.com/gen2brain/avif"
 	"github.com/gen2brain/webp"
+	xdraw "golang.org/x/image/draw"
 )
 
 func pngImage(t *testing.T) []byte {
@@ -254,6 +255,113 @@ func TestDedupe(t *testing.T) {
 	}
 	if removed, err := dedupe(s.images, s.data); err != nil || removed != 0 {
 		t.Fatalf("second pass: removed=%d err=%v", removed, err)
+	}
+}
+
+func TestSimilarDedupe(t *testing.T) {
+	t.Setenv(similarDedupeSetting, "true")
+	s, images, _ := setup(t)
+	original := image.NewNRGBA(image.Rect(0, 0, 117, 208))
+	for y := range original.Bounds().Dy() {
+		for x := range original.Bounds().Dx() {
+			original.SetNRGBA(x, y, color.NRGBA{R: uint8(x*7 + y*3), G: uint8(x*2 + y*5), B: uint8(x*11 + y), A: 255})
+		}
+	}
+	resized := image.NewNRGBA(image.Rect(0, 0, 115, 204))
+	xdraw.ApproxBiLinear.Scale(resized, resized.Bounds(), original, original.Bounds(), xdraw.Src, nil)
+	var pngBytes, jpegBytes, differentBytes bytes.Buffer
+	if err := png.Encode(&pngBytes, original); err != nil {
+		t.Fatal(err)
+	}
+	if err := jpeg.Encode(&jpegBytes, resized, &jpeg.Options{Quality: 90}); err != nil {
+		t.Fatal(err)
+	}
+	if err := png.Encode(&differentBytes, image.NewNRGBA(image.Rect(0, 0, 117, 208))); err != nil {
+		t.Fatal(err)
+	}
+	for name, raw := range map[string][]byte{
+		"a.png":         pngBytes.Bytes(),
+		"b.jpg":         jpegBytes.Bytes(),
+		"different.png": differentBytes.Bytes(),
+	} {
+		if err := os.WriteFile(filepath.Join(images, name), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lock, err := lockTags(s.data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.saveTags(map[string][]string{"a.png": {"original"}, "b.jpg": {"resized"}}); err != nil {
+		lock.Close()
+		t.Fatal(err)
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := dedupe(s.images, s.data)
+	if err != nil || removed != 1 {
+		t.Fatalf("similar dedupe: removed=%d err=%v", removed, err)
+	}
+	entries, err := os.ReadDir(images)
+	if err != nil || len(entries) != 2 || entries[0].Name() != "a.png" || entries[1].Name() != "different.png" {
+		t.Fatalf("unexpected survivors: %v %v", entries, err)
+	}
+	tags, err := readTags(s.data)
+	if err != nil || len(tags) != 1 || len(tags["a.png"]) != 2 {
+		t.Fatalf("similar tags were not merged: %+v %v", tags, err)
+	}
+}
+
+func TestSimilarDedupeSkipsAnimationCapableFormats(t *testing.T) {
+	t.Setenv(similarDedupeSetting, "true")
+	s, images, _ := setup(t)
+	for _, name := range []string{"source.png", "source.gif", "source.webp", "source.avif", "two.gif", "two.webp", "two.avif"} {
+		raw, err := os.ReadFile(filepath.Join("testdata", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(images, name), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if removed, err := dedupe(s.images, s.data); err != nil || removed != 0 {
+		t.Fatalf("animation dedupe: removed=%d err=%v", removed, err)
+	}
+}
+
+func TestDedupeConfig(t *testing.T) {
+	settings := []string{similarDedupeSetting, pHashDistanceSetting, dHashDistanceSetting, ssimSetting}
+	for _, setting := range settings {
+		t.Setenv(setting, "restore")
+		if err := os.Unsetenv(setting); err != nil {
+			t.Fatal(err)
+		}
+	}
+	config, err := dedupeConfigFromEnv()
+	if err != nil || config.similar || config.pHashMaxDistance != 4 || config.dHashMaxDistance != 4 || config.ssimMin != 0.90 {
+		t.Fatalf("defaults: %+v %v", config, err)
+	}
+	t.Setenv(similarDedupeSetting, "true")
+	t.Setenv(pHashDistanceSetting, "2")
+	t.Setenv(dHashDistanceSetting, "3")
+	t.Setenv(ssimSetting, "0.95")
+	config, err = dedupeConfigFromEnv()
+	if err != nil || !config.similar || config.pHashMaxDistance != 2 || config.dHashMaxDistance != 3 || config.ssimMin != 0.95 {
+		t.Fatalf("configured: %+v %v", config, err)
+	}
+	for setting, invalid := range map[string]string{
+		similarDedupeSetting: "sometimes",
+		pHashDistanceSetting: "65",
+		dHashDistanceSetting: "-1",
+		ssimSetting:          "NaN",
+	} {
+		t.Run(setting, func(t *testing.T) {
+			t.Setenv(setting, invalid)
+			if _, err := dedupeConfigFromEnv(); err == nil {
+				t.Fatal("invalid setting accepted")
+			}
+		})
 	}
 }
 

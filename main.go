@@ -567,11 +567,16 @@ func (s *server) upload(w http.ResponseWriter, r *http.Request) {
 }
 
 type duplicate struct {
-	name string
-	stat os.FileInfo
+	name   string
+	stat   os.FileInfo
+	visual *visualFingerprint
 }
 
 func dedupe(images, data *os.Root) (int, error) {
+	config, err := dedupeConfigFromEnv()
+	if err != nil {
+		return 0, err
+	}
 	lock, err := lockTags(data)
 	if err != nil {
 		return 0, err
@@ -592,6 +597,8 @@ func dedupe(images, data *os.Root) (int, error) {
 	}
 	s := &server{images: images, data: data}
 	groups := make(map[[sha256.Size]byte][]duplicate)
+	var copies []duplicate
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 	for _, entry := range entries {
 		name := entry.Name()
 		if !validName(name) || !entry.Type().IsRegular() {
@@ -601,14 +608,22 @@ func dedupe(images, data *os.Root) (int, error) {
 		if err != nil { // Ignore unreadable or disappearing files.
 			continue
 		}
+		var format string
+		var decoded image.Image
 		if _, err := f.Seek(0, io.SeekStart); err == nil {
-			_, _, _, _, err = inspect(f)
+			format, _, _, decoded, err = inspect(f)
 		}
 		if err != nil {
 			f.Close()
 			continue
 		}
+		candidate := duplicate{name: name}
+		if config.similar && (format == "jpeg" || format == "png") {
+			visual := fingerprint(decoded)
+			candidate.visual = &visual
+		}
 		stat, err := f.Stat()
+		candidate.stat = stat
 		if err == nil {
 			_, err = f.Seek(0, io.SeekStart)
 		}
@@ -622,7 +637,8 @@ func dedupe(images, data *os.Root) (int, error) {
 		}
 		var digest [sha256.Size]byte
 		copy(digest[:], hash.Sum(nil))
-		groups[digest] = append(groups[digest], duplicate{name, stat})
+		copies = append(copies, candidate)
+		groups[digest] = append(groups[digest], candidate)
 	}
 	unchanged := func(copy duplicate) bool {
 		current, err := images.Lstat(copy.name)
@@ -631,7 +647,7 @@ func dedupe(images, data *os.Root) (int, error) {
 	next := maps.Clone(tags)
 	type deletion struct{ keep, remove duplicate }
 	var deletions []deletion
-	tagsChanged := false
+	removedNames := make(map[string]bool)
 	for _, copies := range groups {
 		if len(copies) < 2 {
 			continue
@@ -647,26 +663,54 @@ func dedupe(images, data *os.Root) (int, error) {
 			continue
 		}
 		keep := copies[0]
-		merged := append([]string{}, tags[keep.name]...)
+		for _, copy := range copies[1:] {
+			deletions = append(deletions, deletion{keep, copy})
+			removedNames[copy.name] = true
+		}
+	}
+	if config.similar {
+		slog.Info("similar dedupe enabled", "phash_max_distance", config.pHashMaxDistance, "dhash_max_distance", config.dHashMaxDistance, "ssim_min", config.ssimMin)
+		var kept []duplicate
+		for _, copy := range copies {
+			if removedNames[copy.name] || copy.visual == nil || !unchanged(copy) {
+				continue
+			}
+			matched := false
+			for _, keep := range kept {
+				same, pDistance, dDistance, ssim := similarity(*keep.visual, *copy.visual, config)
+				if !same {
+					continue
+				}
+				deletions = append(deletions, deletion{keep, copy})
+				removedNames[copy.name] = true
+				slog.Info("similar duplicate", "keep", keep.name, "remove", copy.name, "phash_distance", pDistance, "dhash_distance", dDistance, "ssim", ssim)
+				matched = true
+				break
+			}
+			if !matched {
+				kept = append(kept, copy)
+			}
+		}
+	}
+	tagsChanged := false
+	for _, pair := range deletions {
+		merged := append([]string{}, next[pair.keep.name]...)
 		seen := make(map[string]bool, len(merged))
 		for _, tag := range merged {
 			seen[strings.ToLower(tag)] = true
 		}
-		for _, copy := range copies[1:] {
-			for _, tag := range tags[copy.name] {
-				if !seen[strings.ToLower(tag)] {
-					merged = append(merged, tag)
-					seen[strings.ToLower(tag)] = true
-				}
+		for _, tag := range next[pair.remove.name] {
+			if !seen[strings.ToLower(tag)] {
+				merged = append(merged, tag)
+				seen[strings.ToLower(tag)] = true
 			}
-			if _, exists := next[copy.name]; exists {
-				delete(next, copy.name)
-				tagsChanged = true
-			}
-			deletions = append(deletions, deletion{keep, copy})
+		}
+		if _, exists := next[pair.remove.name]; exists {
+			delete(next, pair.remove.name)
+			tagsChanged = true
 		}
 		if len(merged) > 0 {
-			next[keep.name] = merged
+			next[pair.keep.name] = merged
 		}
 	}
 	// Persist the union before deleting a tagged source; a failed save must not lose tags.
@@ -675,17 +719,17 @@ func dedupe(images, data *os.Root) (int, error) {
 			return 0, err
 		}
 	}
-	removed := 0
+	removedCount := 0
 	for _, pair := range deletions {
 		if !unchanged(pair.keep) || !unchanged(pair.remove) {
-			return removed, fmt.Errorf("image changed during dedupe: %s", pair.remove.name)
+			return removedCount, fmt.Errorf("image changed during dedupe: %s", pair.remove.name)
 		}
 		if err := images.Remove(pair.remove.name); err != nil {
-			return removed, err
+			return removedCount, err
 		}
-		removed++
+		removedCount++
 	}
-	return removed, nil
+	return removedCount, nil
 }
 
 func main() {
