@@ -35,6 +35,22 @@ $ kubectl -n saladbooru port-forward svc/saladbooru 18080:8080
 Open http://127.0.0.1:18080/.
 Images can be uploaded there, posted as multipart `file` to `POST /api/posts`, or placed directly in `/data/images/`.
 
+The dedupe CronJob runs every six hours and removes byte-identical images and, by default, visually equivalent JPEG and PNG images.
+It first requires both pHash and dHash to be close, then confirms the pair with local SSIM; tags from the removed file are merged into the retained file.
+GIF, WebP, and AVIF files are only deduplicated when their bytes are identical, avoiding false matches between animations that share a first frame.
+
+Tune the conservative defaults in `base/cronjob.yaml` through environment variables:
+
+| Variable | Default | Meaning |
+| --- | ---: | --- |
+| `SALADBOORU_DEDUPE_SIMILAR` | `false` | Enable visual matching (`base/cronjob.yaml` sets `true`) |
+| `SALADBOORU_DEDUPE_PHASH_MAX_DISTANCE` | `4` | Maximum pHash Hamming distance, 0–64 |
+| `SALADBOORU_DEDUPE_DHASH_MAX_DISTANCE` | `4` | Maximum dHash Hamming distance, 0–64 |
+| `SALADBOORU_DEDUPE_SSIM_MIN` | `0.90` | Minimum local SSIM, 0–1 |
+
+Lower hash distances or raise SSIM to reduce matches.
+Invalid values fail the dedupe Job instead of silently changing its behavior.
+
 ### Docker
 
 Try Saladbooru locally with Docker Compose:
