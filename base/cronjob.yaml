@@ -4,6 +4,7 @@ metadata:
   name: saladbooru-dedupe
 spec:
   schedule: "0 */6 * * *"
+  suspend: false
   concurrencyPolicy: Forbid
   jobTemplate:
     spec:
