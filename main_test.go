@@ -267,22 +267,30 @@ func TestSimilarDedupe(t *testing.T) {
 			original.SetNRGBA(x, y, color.NRGBA{R: uint8(x*7 + y*3), G: uint8(x*2 + y*5), B: uint8(x*11 + y), A: 255})
 		}
 	}
-	resized := image.NewNRGBA(image.Rect(0, 0, 115, 204))
-	xdraw.ApproxBiLinear.Scale(resized, resized.Bounds(), original, original.Bounds(), xdraw.Src, nil)
-	var pngBytes, jpegBytes, differentBytes bytes.Buffer
-	if err := png.Encode(&pngBytes, original); err != nil {
+	var jpegBytes, pngBytes, resizedBytes, differentBytes bytes.Buffer
+	if err := jpeg.Encode(&jpegBytes, original, &jpeg.Options{Quality: 90}); err != nil {
 		t.Fatal(err)
 	}
-	if err := jpeg.Encode(&jpegBytes, resized, &jpeg.Options{Quality: 90}); err != nil {
+	converted, err := jpeg.Decode(bytes.NewReader(jpegBytes.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := png.Encode(&pngBytes, converted); err != nil {
+		t.Fatal(err)
+	}
+	resized := image.NewNRGBA(image.Rect(0, 0, 115, 204))
+	xdraw.ApproxBiLinear.Scale(resized, resized.Bounds(), converted, converted.Bounds(), xdraw.Src, nil)
+	if err := png.Encode(&resizedBytes, resized); err != nil {
 		t.Fatal(err)
 	}
 	if err := png.Encode(&differentBytes, image.NewNRGBA(image.Rect(0, 0, 117, 208))); err != nil {
 		t.Fatal(err)
 	}
 	for name, raw := range map[string][]byte{
-		"a.png":         pngBytes.Bytes(),
-		"b.jpg":         jpegBytes.Bytes(),
+		"a.jpg":         jpegBytes.Bytes(),
+		"b.png":         pngBytes.Bytes(),
 		"different.png": differentBytes.Bytes(),
+		"resized.png":   resizedBytes.Bytes(),
 	} {
 		if err := os.WriteFile(filepath.Join(images, name), raw, 0600); err != nil {
 			t.Fatal(err)
@@ -292,7 +300,7 @@ func TestSimilarDedupe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.saveTags(map[string][]string{"a.png": {"original"}, "b.jpg": {"resized"}}); err != nil {
+	if err := s.saveTags(map[string][]string{"a.jpg": {"original"}, "b.png": {"converted"}}); err != nil {
 		lock.Close()
 		t.Fatal(err)
 	}
@@ -300,16 +308,57 @@ func TestSimilarDedupe(t *testing.T) {
 		t.Fatal(err)
 	}
 	removed, err := dedupe(s.images, s.data)
-	if err != nil || removed != 1 {
+	if err != nil || removed != 2 {
 		t.Fatalf("similar dedupe: removed=%d err=%v", removed, err)
 	}
 	entries, err := os.ReadDir(images)
-	if err != nil || len(entries) != 2 || entries[0].Name() != "a.png" || entries[1].Name() != "different.png" {
+	if err != nil || len(entries) != 2 || entries[0].Name() != "b.png" || entries[1].Name() != "different.png" {
 		t.Fatalf("unexpected survivors: %v %v", entries, err)
 	}
 	tags, err := readTags(s.data)
-	if err != nil || len(tags) != 1 || len(tags["a.png"]) != 2 {
+	if err != nil || len(tags) != 1 || len(tags["b.png"]) != 2 {
 		t.Fatalf("similar tags were not merged: %+v %v", tags, err)
+	}
+}
+
+func TestDuplicatePreference(t *testing.T) {
+	dir := t.TempDir()
+	stat := func(name string, modified time.Time) os.FileInfo {
+		t.Helper()
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(name), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(path, modified, modified); err != nil {
+			t.Fatal(err)
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return info
+	}
+	old := stat("old", time.Unix(1000, 0))
+	new := stat("new", time.Unix(2000, 0))
+	for i, format := range []string{"png", "avif", "webp", "jpeg", "gif"} {
+		if got := formatPriority(format); got != 5-i {
+			t.Fatalf("formatPriority(%q) = %d", format, got)
+		}
+	}
+	for _, tc := range []struct {
+		name        string
+		left, right duplicate
+	}{
+		{"pixels", duplicate{name: "z", format: "gif", width: 101, height: 100, stat: new}, duplicate{name: "a", format: "png", width: 100, height: 100, stat: old}},
+		{"format", duplicate{name: "z", format: "png", width: 100, height: 100, stat: new}, duplicate{name: "a", format: "avif", width: 100, height: 100, stat: old}},
+		{"oldest", duplicate{name: "z", format: "png", width: 100, height: 100, stat: old}, duplicate{name: "a", format: "png", width: 100, height: 100, stat: new}},
+		{"filename", duplicate{name: "a", format: "png", width: 100, height: 100, stat: old}, duplicate{name: "z", format: "png", width: 100, height: 100, stat: old}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if !preferDuplicate(tc.left, tc.right) || preferDuplicate(tc.right, tc.left) {
+				t.Fatalf("unexpected order: %+v %+v", tc.left, tc.right)
+			}
+		})
 	}
 }
 

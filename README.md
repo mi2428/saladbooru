@@ -36,7 +36,8 @@ Open http://127.0.0.1:18080/.
 Images can be uploaded there, posted as multipart `file` to `POST /api/posts`, or placed directly in `/data/images/`.
 
 The dedupe CronJob runs every six hours and removes byte-identical images and, by default, visually equivalent JPEG and PNG images.
-It first requires both pHash and dHash to be close, then confirms the pair with local SSIM; tags from the removed file are merged into the retained file.
+It requires close pHash and dHash values, then confirms the pair with local SSIM; tags from the removed file are merged into the retained file.
+The retained image is chosen by pixel count, format (`PNG > AVIF > WebP > JPEG > GIF`), oldest modification time, then filename.
 GIF, WebP, and AVIF files are only deduplicated when their bytes are identical, avoiding false matches between animations that share a first frame.
 
 Tune the conservative defaults in `base/cronjob.yaml` through environment variables:

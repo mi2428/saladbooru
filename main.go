@@ -567,9 +567,44 @@ func (s *server) upload(w http.ResponseWriter, r *http.Request) {
 }
 
 type duplicate struct {
-	name   string
-	stat   os.FileInfo
-	visual *visualFingerprint
+	name          string
+	format        string
+	width, height int
+	digest        [sha256.Size]byte
+	stat          os.FileInfo
+	visual        *visualFingerprint
+}
+
+func formatPriority(format string) int {
+	switch format {
+	case "png":
+		return 5
+	case "avif":
+		return 4
+	case "webp":
+		return 3
+	case "jpeg":
+		return 2
+	case "gif":
+		return 1
+	default:
+		return 0
+	}
+}
+
+func preferDuplicate(left, right duplicate) bool {
+	leftPixels := uint64(left.width) * uint64(left.height)
+	rightPixels := uint64(right.width) * uint64(right.height)
+	if leftPixels != rightPixels {
+		return leftPixels > rightPixels
+	}
+	if leftPriority, rightPriority := formatPriority(left.format), formatPriority(right.format); leftPriority != rightPriority {
+		return leftPriority > rightPriority
+	}
+	if !left.stat.ModTime().Equal(right.stat.ModTime()) {
+		return left.stat.ModTime().Before(right.stat.ModTime())
+	}
+	return left.name < right.name
 }
 
 func dedupe(images, data *os.Root) (int, error) {
@@ -596,9 +631,7 @@ func dedupe(images, data *os.Root) (int, error) {
 		return 0, err
 	}
 	s := &server{images: images, data: data}
-	groups := make(map[[sha256.Size]byte][]duplicate)
 	var copies []duplicate
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 	for _, entry := range entries {
 		name := entry.Name()
 		if !validName(name) || !entry.Type().IsRegular() {
@@ -609,15 +642,16 @@ func dedupe(images, data *os.Root) (int, error) {
 			continue
 		}
 		var format string
+		var width, height int
 		var decoded image.Image
 		if _, err := f.Seek(0, io.SeekStart); err == nil {
-			format, _, _, decoded, err = inspect(f)
+			format, width, height, decoded, err = inspect(f)
 		}
 		if err != nil {
 			f.Close()
 			continue
 		}
-		candidate := duplicate{name: name}
+		candidate := duplicate{name: name, format: format, width: width, height: height}
 		if config.similar && (format == "jpeg" || format == "png") {
 			visual := fingerprint(decoded)
 			candidate.visual = &visual
@@ -637,8 +671,13 @@ func dedupe(images, data *os.Root) (int, error) {
 		}
 		var digest [sha256.Size]byte
 		copy(digest[:], hash.Sum(nil))
+		candidate.digest = digest
 		copies = append(copies, candidate)
-		groups[digest] = append(groups[digest], candidate)
+	}
+	sort.Slice(copies, func(i, j int) bool { return preferDuplicate(copies[i], copies[j]) })
+	groups := make(map[[sha256.Size]byte][]duplicate)
+	for _, copy := range copies {
+		groups[copy.digest] = append(groups[copy.digest], copy)
 	}
 	unchanged := func(copy duplicate) bool {
 		current, err := images.Lstat(copy.name)
