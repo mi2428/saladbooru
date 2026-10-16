@@ -3,7 +3,7 @@ kind: CronJob
 metadata:
   name: saladbooru-dedupe
 spec:
-  schedule: "0 3 * * *"
+  schedule: "0 */6 * * *"
   concurrencyPolicy: Forbid
   jobTemplate:
     spec:
@@ -25,6 +25,14 @@ spec:
               env:
                 - name: SALADBOORU_DATA_DIR
                   value: /data
+                - name: SALADBOORU_DEDUPE_SIMILAR
+                  value: "true"
+                - name: SALADBOORU_DEDUPE_PHASH_MAX_DISTANCE
+                  value: "4"
+                - name: SALADBOORU_DEDUPE_DHASH_MAX_DISTANCE
+                  value: "4"
+                - name: SALADBOORU_DEDUPE_SSIM_MIN
+                  value: "0.90"
               securityContext:
                 allowPrivilegeEscalation: false
                 readOnlyRootFilesystem: true
