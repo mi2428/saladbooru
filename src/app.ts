@@ -1045,7 +1045,6 @@ if (typeof document !== 'undefined') {
     scale = 1;
     panX = panY = 0;
     renderImage();
-    detailStatus.textContent = 'Checking image tags…';
     full.alt = currentName;
     tagsReady = false;
     tagsOpen.disabled = true;
