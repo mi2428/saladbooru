@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"container/list"
 	"crypto/rand"
 	"crypto/sha256"
 	"embed"
@@ -52,6 +53,7 @@ type server struct {
 	listCache       map[string]cachedItem
 	thumbMu         sync.Mutex
 	thumbCache      map[string]cachedThumbnail
+	thumbLRU        list.List
 	thumbBytes      int
 	thumbLimit      int
 	thumbHits       uint64

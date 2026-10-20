@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"container/list"
 	"context"
 	"encoding/json"
 	"errors"
@@ -20,8 +21,9 @@ import (
 )
 
 type cachedThumbnail struct {
-	data []byte
-	stat os.FileInfo
+	data    []byte
+	stat    os.FileInfo
+	lruNode *list.Element
 }
 
 type thumbnailCacheStats struct {
@@ -80,6 +82,15 @@ func (s *server) thumbnailCacheStats(w http.ResponseWriter, _ *http.Request) {
 	json.NewEncoder(w).Encode(stats)
 }
 
+// removeCachedThumbnail requires thumbMu to be held.
+func (s *server) removeCachedThumbnail(name string) {
+	if cached, ok := s.thumbCache[name]; ok {
+		delete(s.thumbCache, name)
+		s.thumbBytes -= len(cached.data)
+		s.thumbLRU.Remove(cached.lruNode)
+	}
+}
+
 func (s *server) thumbnail(w http.ResponseWriter, r *http.Request) {
 	if r.Context().Err() != nil {
 		return
@@ -122,9 +133,13 @@ func (s *server) thumbnailBytes(ctx context.Context, name string, f *os.File, st
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if cached, ok := s.thumbCache[name]; ok && os.SameFile(cached.stat, stat) && cached.stat.Size() == stat.Size() && cached.stat.ModTime().Equal(stat.ModTime()) {
-		s.thumbHits++
-		return cached.data, nil
+	if cached, ok := s.thumbCache[name]; ok {
+		if os.SameFile(cached.stat, stat) && cached.stat.Size() == stat.Size() && cached.stat.ModTime().Equal(stat.ModTime()) {
+			s.thumbHits++
+			s.thumbLRU.MoveToFront(cached.lruNode)
+			return cached.data, nil
+		}
+		s.removeCachedThumbnail(name)
 	}
 	s.thumbMisses++
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
@@ -157,19 +172,16 @@ func (s *server) thumbnailBytes(ctx context.Context, name string, f *os.File, st
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	// Clear the whole cache at its limit; use LRU if broad galleries cause repeat decoding.
 	if s.thumbLimit > 0 && out.Len() <= s.thumbLimit {
-		if previous, ok := s.thumbCache[name]; ok {
-			s.thumbBytes -= len(previous.data)
-		}
-		if s.thumbBytes+out.Len() > s.thumbLimit {
-			s.thumbCache = nil
-			s.thumbBytes = 0
+		s.removeCachedThumbnail(name)
+		for s.thumbBytes > s.thumbLimit-out.Len() {
+			s.removeCachedThumbnail(s.thumbLRU.Back().Value.(string))
 		}
 		if s.thumbCache == nil {
 			s.thumbCache = make(map[string]cachedThumbnail)
 		}
-		s.thumbCache[name] = cachedThumbnail{out.Bytes(), stat}
+		cached := cachedThumbnail{data: out.Bytes(), stat: stat, lruNode: s.thumbLRU.PushFront(name)}
+		s.thumbCache[name] = cached
 		s.thumbBytes += out.Len()
 	}
 	return out.Bytes(), nil
