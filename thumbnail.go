@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"image"
 	"image/draw"
@@ -12,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/gen2brain/webp"
 	xdraw "golang.org/x/image/draw"
@@ -20,6 +22,18 @@ import (
 type cachedThumbnail struct {
 	data []byte
 	stat os.FileInfo
+}
+
+type thumbnailCacheStats struct {
+	Since           time.Time `json:"since"`
+	CacheEntries    int       `json:"cache_entries"`
+	CacheBytes      int       `json:"cache_bytes"`
+	CacheLimitBytes int       `json:"cache_limit_bytes"`
+	Lookups         uint64    `json:"lookups"`
+	Hits            uint64    `json:"hits"`
+	Misses          uint64    `json:"misses"`
+	HitRate         *float64  `json:"hit_rate"`
+	Generated       uint64    `json:"generated"`
 }
 
 const mebibyte = 1 << 20
@@ -36,6 +50,34 @@ func thumbnailCacheLimit() (int, error) {
 		return 0, errors.New(settingName + " must be a non-negative number of MiB")
 	}
 	return mib * mebibyte, nil
+}
+
+func (s *server) thumbnailCacheStats(w http.ResponseWriter, _ *http.Request) {
+	s.thumbMu.Lock()
+	hits, misses := s.thumbHits, s.thumbMisses
+	lookups := hits + misses
+	var hitRate *float64
+	if lookups > 0 {
+		rate := float64(hits) / float64(lookups)
+		hitRate = &rate
+	}
+	stats := thumbnailCacheStats{
+		Since:           s.thumbStatsSince,
+		CacheEntries:    len(s.thumbCache),
+		CacheBytes:      s.thumbBytes,
+		CacheLimitBytes: s.thumbLimit,
+		Lookups:         lookups,
+		Hits:            hits,
+		Misses:          misses,
+		HitRate:         hitRate,
+		Generated:       s.thumbGenerated,
+	}
+	s.thumbMu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	json.NewEncoder(w).Encode(stats)
 }
 
 func (s *server) thumbnail(w http.ResponseWriter, r *http.Request) {
@@ -81,8 +123,10 @@ func (s *server) thumbnailBytes(ctx context.Context, name string, f *os.File, st
 		return nil, err
 	}
 	if cached, ok := s.thumbCache[name]; ok && os.SameFile(cached.stat, stat) && cached.stat.Size() == stat.Size() && cached.stat.ModTime().Equal(stat.ModTime()) {
+		s.thumbHits++
 		return cached.data, nil
 	}
+	s.thumbMisses++
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return nil, err
 	}
@@ -109,6 +153,7 @@ func (s *server) thumbnailBytes(ctx context.Context, name string, f *os.File, st
 	if err := webp.Encode(&out, decoded, webp.Options{Quality: 75, Method: 2}); err != nil {
 		return nil, err
 	}
+	s.thumbGenerated++
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}

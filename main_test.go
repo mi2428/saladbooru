@@ -715,6 +715,37 @@ func TestThumbnailResizeAndInvalidation(t *testing.T) {
 	}
 }
 
+func TestThumbnailCacheStats(t *testing.T) {
+	_, images, h := setup(t)
+	if err := os.WriteFile(filepath.Join(images, "cached.png"), pngImage(t), 0600); err != nil {
+		t.Fatal(err)
+	}
+	readStats := func() thumbnailCacheStats {
+		t.Helper()
+		response := get(t, h, "/debug/thumbnail-cache")
+		if response.Code != http.StatusOK || response.Header().Get("Content-Type") != "application/json" || response.Header().Get("Cache-Control") != "no-store" || response.Header().Get("X-Content-Type-Options") != "nosniff" {
+			t.Fatalf("stats response: %d %v", response.Code, response.Header())
+		}
+		var stats thumbnailCacheStats
+		if err := json.Unmarshal(response.Body.Bytes(), &stats); err != nil {
+			t.Fatal(err)
+		}
+		return stats
+	}
+	if stats := readStats(); stats.Since.IsZero() || stats.Lookups != 0 || stats.HitRate != nil || stats.CacheEntries != 0 || stats.Generated != 0 {
+		t.Fatalf("initial stats: %+v", stats)
+	}
+	for range 2 {
+		if response := get(t, h, "/thumbs/cached.png"); response.Code != http.StatusOK {
+			t.Fatalf("thumbnail: %d", response.Code)
+		}
+	}
+	stats := readStats()
+	if stats.Lookups != 2 || stats.Hits != 1 || stats.Misses != 1 || stats.HitRate == nil || *stats.HitRate != 0.5 || stats.Generated != 1 || stats.CacheEntries != 1 || stats.CacheBytes == 0 || stats.CacheLimitBytes != defaultThumbnailCacheLimit {
+		t.Fatalf("unexpected thumbnail stats: %+v", stats)
+	}
+}
+
 func TestThumbnailCacheLimit(t *testing.T) {
 	const setting = "SALADBOORU_THUMB_CACHE_MIB"
 	t.Setenv(setting, "1")
@@ -768,6 +799,13 @@ func TestThumbnailCacheLimit(t *testing.T) {
 				}
 				if s.thumbBytes != 0 || len(s.thumbCache) != 0 {
 					t.Fatal("cache disabled but retained thumbnails")
+				}
+				var stats thumbnailCacheStats
+				if response := get(t, h, "/debug/thumbnail-cache"); response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &stats) != nil {
+					t.Fatalf("thumbnail stats: %d %s", response.Code, response.Body.String())
+				}
+				if stats.Lookups != 2 || stats.Misses != 2 || stats.Generated != 2 || stats.HitRate == nil || *stats.HitRate != 0 || stats.CacheEntries != 0 {
+					t.Fatalf("unexpected uncached stats: %+v", stats)
 				}
 			}
 		})

@@ -46,16 +46,20 @@ var galleryCSP = strings.Join([]string{
 }, "; ")
 
 type server struct {
-	images     *os.Root
-	data       *os.Root
-	listMu     sync.Mutex
-	listCache  map[string]cachedItem
-	thumbMu    sync.Mutex
-	thumbCache map[string]cachedThumbnail
-	thumbBytes int
-	thumbLimit int
-	tagsMu     sync.RWMutex
-	tagsFailed bool
+	images          *os.Root
+	data            *os.Root
+	listMu          sync.Mutex
+	listCache       map[string]cachedItem
+	thumbMu         sync.Mutex
+	thumbCache      map[string]cachedThumbnail
+	thumbBytes      int
+	thumbLimit      int
+	thumbHits       uint64
+	thumbMisses     uint64
+	thumbGenerated  uint64
+	thumbStatsSince time.Time
+	tagsMu          sync.RWMutex
+	tagsFailed      bool
 }
 
 type item struct {
@@ -88,7 +92,7 @@ func newServer(dataDir string, thumbLimit int) (*server, error) {
 		data.Close()
 		return nil, fmt.Errorf("invalid tags.json: %w", err)
 	}
-	return &server{images: root, data: data, thumbLimit: thumbLimit}, nil
+	return &server{images: root, data: data, thumbLimit: thumbLimit, thumbStatsSince: time.Now()}, nil
 }
 
 func openImages(dataDir string) (*os.Root, error) {
@@ -233,6 +237,7 @@ func (s *server) loggedUpload(w http.ResponseWriter, r *http.Request) {
 func (s *server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.health)
+	mux.HandleFunc("GET /debug/thumbnail-cache", s.thumbnailCacheStats)
 	mux.HandleFunc("GET /api/posts", s.list)
 	mux.HandleFunc("POST /api/posts", s.loggedUpload)
 	mux.HandleFunc("DELETE /api/posts/{name}", s.deletePost)
