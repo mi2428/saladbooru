@@ -221,7 +221,7 @@ test('NSFW is a permanent candidate but hidden posts are excluded until explicit
   assert.deepEqual(tagSuggestions(posts, [], 'sfw'), ['NSFW']);
   assert.deepEqual(tagSuggestions(posts, ['nsfw'], ''), ['Blue']);
   assert.deepEqual(tagSuggestions([], [], '', false), []);
-  assert.equal(tagSuggestions(Array.from({length: 35}, (_, i) => ({tags: [`tag${i}`]})), [], '').length, 30);
+  assert.equal(tagSuggestions(Array.from({length: 65}, (_, i) => ({tags: [`tag${i}`]})), [], '').length, 60);
 });
 
 test('active filters come first while Untagged always remains last', () => {

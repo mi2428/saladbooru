@@ -19,6 +19,7 @@ const PULL_THRESHOLD = 80;
 const PULL_LOCK_DISTANCE = 10;
 const NSFW_TAG = 'NSFW';
 const UNTAGGED_TAG = 'Untagged';
+const TAG_SUGGESTION_LIMIT = 60;
 const key = (tag: Tag) => tag.toLowerCase();
 const UNTAGGED_KEY = key(UNTAGGED_TAG);
 const TAG_COLORS = [
@@ -165,7 +166,7 @@ export function tagSuggestions(posts: Pick<Post, 'tags'>[], draft: readonly Tag[
   const candidates = includeDefault ? [NSFW_TAG, ...tags.filter(tag => key(tag) !== key(NSFW_TAG))] : tags;
   const existing = new Set(draft.map(key));
   const search = key(query.trim());
-  return candidates.filter(tag => !existing.has(key(tag)) && (!search || key(tag).includes(search))).slice(0, 30);
+  return candidates.filter(tag => !existing.has(key(tag)) && (!search || key(tag).includes(search))).slice(0, TAG_SUGGESTION_LIMIT);
 }
 
 export function filterTags(posts: Pick<Post, 'tags'>[], selected: ReadonlyMap<string, Tag>): Tag[] {
