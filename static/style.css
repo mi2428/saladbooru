@@ -47,6 +47,9 @@ main.is-pull-resetting { transform: translate3d(0, 0, 0); transition: transform 
 #detail-status { position: absolute; bottom: max(16px, env(safe-area-inset-bottom)); left: 16px; box-sizing: border-box; max-width: calc(100% - 164px); }
 .sheet { box-sizing: border-box; width: min(320px, calc(100vw - 24px)); max-height: calc(100dvh - 48px); overflow-y: auto; padding: 12px; border: 0; border-radius: 14px; color: #182331; background: #fff; box-shadow: 0 8px 24px #0b1d3133; overscroll-behavior: contain; touch-action: pan-y; }
 .sheet::backdrop { background: #0b1d3155; }
+/* The tag sheet lists up to 60 suggestions, so give it more width and a taller list than the default sheet. */
+#tags-sheet { width: min(560px, calc(100vw - 24px)); }
+#tags-sheet .tag-options { max-height: min(52dvh, 440px); }
 .sheet h2 { margin: 0 0 6px; font-size: 1.05rem; }
 .sheet p { margin: 6px 0 10px; }
 .sheet label { display: block; margin: 8px 0 4px; font-size: 13px; font-weight: 600; }
